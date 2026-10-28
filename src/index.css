@@ -1,0 +1,198 @@
+@import "tailwindcss";
+@import url('https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css');
+
+@variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: 'Vazirmatn', 'Vazir', 'Shabnam', 'Sahel', 'Tahoma', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Vazirmatn', 'Vazir', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+@layer base {
+  :root {
+    --brand-primary: #2596BE;
+    --brand-primary-hover: #1E7E9E;
+    --brand-navy-dark: #0B1325;
+    --brand-navy-surface: #111C33;
+    --brand-navy-card: #182747;
+  }
+
+  html {
+    background-color: #f8fafc;
+    color: #0f172a;
+    transition: background-color 0.2s ease, color 0.2s ease;
+    font-family: 'Vazirmatn', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  html.dark {
+    background-color: #0B1325;
+    color: #f8fafc;
+  }
+
+  body, input, select, textarea, button, table {
+    font-family: 'Vazirmatn', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    letter-spacing: -0.01em;
+  }
+
+  body {
+    min-height: 100vh;
+  }
+
+  /* Ensure tabular numbers for accounting */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Prevent background page scrolling when modals/dialogs are open */
+html.modal-open,
+body.modal-open,
+html:has(.fixed.inset-0:not(.pointer-events-none)),
+body:has(.fixed.inset-0:not(.pointer-events-none)) {
+  overflow: hidden !important;
+  height: 100vh !important;
+  max-height: 100vh !important;
+  overscroll-behavior: none !important;
+  touch-action: none !important;
+}
+
+body.modal-open #root {
+  overflow: hidden !important;
+  max-height: 100vh !important;
+}
+
+.fixed.inset-0 {
+  overscroll-behavior: contain;
+}
+
+/* Custom scrollbars: appear only on hover, transparent by default */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+*:hover {
+  scrollbar-color: rgba(148, 163, 184, 0.45) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 9999px;
+  transition: background-color 0.2s ease;
+}
+
+*:hover::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.45);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.75) !important;
+}
+
+/* Ensure vertical scrollbars are placed on the right side */
+.overflow-y-auto,
+.overflow-y-scroll {
+  direction: ltr;
+}
+
+.overflow-y-auto > *,
+.overflow-y-scroll > * {
+  direction: rtl;
+}
+
+/* Hide scrollbar completely where not needed (e.g. tabs, category titles) */
+.no-scrollbar::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none !important;
+  scrollbar-width: none !important;
+}
+
+.print-only {
+  display: none;
+}
+
+/* Print styles for thermal receipts and official reports */
+@media print {
+  @page {
+    margin: 4mm;
+    size: auto;
+  }
+
+  *, html, body, div, p, span, h1, h2, h3, h4, table, th, td {
+    font-family: 'Vazirmatn', 'Vazir', 'Shabnam', 'Sahel', 'Tahoma', sans-serif !important;
+  }
+
+  html, body {
+    background: white !important;
+    color: black !important;
+  }
+
+  /* Hide app navigation, headers, background elements, and modal action buttons */
+  aside, header, nav, button, .no-print {
+    display: none !important;
+  }
+
+  /* Make sure modal overlays don't block printing */
+  .fixed {
+    position: static !important;
+    background: transparent !important;
+    padding: 0 !important;
+    display: block !important;
+  }
+
+  /* Thermal Receipt Card Styling for 80mm printers */
+  #printable-receipt {
+    visibility: visible !important;
+    display: block !important;
+    width: 76mm !important;
+    max-width: 76mm !important;
+    margin: 0 auto !important;
+    padding: 4mm !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: white !important;
+    color: black !important;
+    font-family: 'Vazirmatn', 'Vazir', 'Tahoma', sans-serif !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Official A4 Financial Report */
+  #official-report-printable {
+    visibility: visible !important;
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 8mm !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: white !important;
+    color: black !important;
+    font-family: 'Vazirmatn', 'Vazir', 'Tahoma', sans-serif !important;
+  }
+
+  #official-report-printable table {
+    page-break-inside: auto;
+  }
+
+  #official-report-printable tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+}
