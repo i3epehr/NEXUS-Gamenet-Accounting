@@ -25,7 +25,7 @@ if %ERRORLEVEL% neq 0 (
 :: ۳. نصب پکیج‌های جدید در صورت وجود
 echo.
 echo [3/4] بررسی و نصب وابستگی‌ها...
-call npm install --no-audit
+call npm install --legacy-peer-deps --no-audit
 
 :: ۴. بیلد مجدد برنامه
 echo.

@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "update": "git pull && npm install && npm run build"
+    "update": "git pull && npm install --legacy-peer-deps && npm run build"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

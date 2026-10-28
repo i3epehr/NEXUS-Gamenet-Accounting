@@ -22,7 +22,7 @@ git pull origin main
 # ۳. نصب وابستگی‌های جدید
 echo ""
 echo "[3/4] بررسی و نصب وابستگی‌ها..."
-npm install --no-audit
+npm install --legacy-peer-deps --no-audit
 
 # ۴. بیلد برنامه
 echo ""
