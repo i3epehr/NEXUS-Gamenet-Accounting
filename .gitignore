@@ -1,0 +1,14 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Database & Persistent Data (Never push customer data to GitHub)
+data/
+*.tmp
+*.bak
+*.corrupted.*

@@ -1,0 +1,6 @@
+{
+  "name": "NEXUS GameNet Accounting",
+  "description": "سامانه جامع مدیریت مالی، حسابداری، بوفه و میزهای گیم‌نت نکسوس",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
