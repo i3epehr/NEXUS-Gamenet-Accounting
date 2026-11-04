@@ -18,11 +18,15 @@ import {
   X,
   Check,
   Coffee,
+  Bell,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
-import { AuditLog, Category, CategorySection, GameNetSettings, ResetOptions, Role, User } from '../types/index.ts';
+import { AuditLog, Category, CategorySection, GameNetSettings, ResetOptions, Role, User, ReservationAlarmSoundType } from '../types/index.ts';
 import { formatJalaliReadable } from '../utils/jalali.ts';
 import { ConfirmModal } from './ConfirmModal.tsx';
 import { useLockBodyScroll } from '../utils/useLockBodyScroll.ts';
+import { playReservationAlarmSound } from '../utils/audioAlert.ts';
 
 export const INCOME_SECTIONS: { id: CategorySection; label: string }[] = [
   { id: 'gaming', label: 'گیمینگ و کرایه کنسول / PC' },
@@ -118,6 +122,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [receiptFooter, setReceiptFooter] = useState(settings.receiptFooter);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileSuccess, setProfileSuccess] = useState(false);
+
+  // Reservation Alert Settings State
+  const [resvAlertEnabled, setResvAlertEnabled] = useState(settings.reservationAlertEnabled ?? true);
+  const [resvAlertMinutes, setResvAlertMinutes] = useState<number>(settings.reservationAlertMinutes ?? 30);
+  const [resvAlertSound, setResvAlertSound] = useState<ReservationAlarmSoundType>(settings.reservationAlertSound ?? 'chime');
+  const [resvSettingsLoading, setResvSettingsLoading] = useState(false);
+  const [resvSettingsSuccess, setResvSettingsSuccess] = useState(false);
 
   // New Category state
   const [newCatName, setNewCatName] = useState('');
@@ -418,6 +429,26 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
+  const handleSaveReservationSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setResvSettingsLoading(true);
+      setResvSettingsSuccess(false);
+      await onUpdateSettings({
+        reservationAlertEnabled: resvAlertEnabled,
+        reservationAlertMinutes: resvAlertMinutes,
+        reservationAlertSound: resvAlertSound,
+      });
+      setResvSettingsSuccess(true);
+      setTimeout(() => setResvSettingsSuccess(false), 3000);
+      onRefresh();
+    } catch {
+      // handled
+    } finally {
+      setResvSettingsLoading(false);
+    }
+  };
+
   const handleAddCategory = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCatName.trim()) return;
@@ -569,73 +600,210 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         ))}
       </div>
 
-      {/* Tab 1: Profile */}
+      {/* Tab 1: Profile & Reservation Alert Settings */}
       {activeTab === 'profile' && (
-        <div className="max-w-2xl bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xs space-y-5">
-          <h2 className="text-sm font-bold text-slate-900 dark:text-white">
-            مشخصات کلی مجموعه و فاکتور چاپی
-          </h2>
-          <form onSubmit={handleProfileSubmit} className="space-y-4">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                نام مجموعه / گیم‌نت
-              </label>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs font-medium"
-              />
+        <div className="max-w-2xl space-y-6">
+          {/* Card 1: Shop & Receipt Info */}
+          <div className="bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xs space-y-5">
+            <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+              مشخصات کلی مجموعه و فاکتور چاپی
+            </h2>
+            <form onSubmit={handleProfileSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  نام مجموعه / گیم‌نت
+                </label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs font-medium"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  تلفن تماس
+                </label>
+                <input
+                  type="text"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  آدرس مجموعه
+                </label>
+                <input
+                  type="text"
+                  value={address}
+                  onChange={(e) => setAddress(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  متن پاورقی فیش چاپی حرارتی
+                </label>
+                <textarea
+                  rows={2}
+                  value={receiptFooter}
+                  onChange={(e) => setReceiptFooter(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
+                />
+              </div>
+              <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-800">
+                {profileSuccess && (
+                  <span className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
+                    <CheckCircle2 className="w-4 h-4" />
+                    تنظیمات با موفقیت ذخیره شد
+                  </span>
+                )}
+                <button
+                  type="submit"
+                  disabled={profileLoading}
+                  className="mr-auto px-5 py-2 bg-[#2596BE] hover:bg-[#1E7E9E] text-white text-xs font-bold rounded-xl transition-all cursor-pointer"
+                >
+                  {profileLoading ? 'در حال ذخیره...' : 'ذخیره مشخصات'}
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {/* Card 2: Reservation Notification & Alarm Sound */}
+          <div className="bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xs space-y-5">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <Bell className="w-4 h-4 text-amber-500" />
+                <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+                  تنظیمات یادآوری و صدای آلارم نوبت رزروها
+                </h2>
+              </div>
+              <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                نوتیفیکیشن سراسری و هشدار صوتی
+              </span>
             </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                تلفن تماس
-              </label>
-              <input
-                type="text"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs font-mono"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                آدرس مجموعه
-              </label>
-              <input
-                type="text"
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                متن پاورقی فیش چاپی حرارتی
-              </label>
-              <textarea
-                rows={2}
-                value={receiptFooter}
-                onChange={(e) => setReceiptFooter(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs"
-              />
-            </div>
-            <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-800">
-              {profileSuccess && (
-                <span className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
-                  <CheckCircle2 className="w-4 h-4" />
-                  تنظیمات با موفقیت ذخیره شد
-                </span>
-              )}
-              <button
-                type="submit"
-                disabled={profileLoading}
-                className="mr-auto px-5 py-2 bg-[#2596BE] hover:bg-[#1E7E9E] text-white text-xs font-bold rounded-xl transition-all cursor-pointer"
-              >
-                {profileLoading ? 'در حال ذخیره...' : 'ذخیره تنظیمات'}
-              </button>
-            </div>
-          </form>
+
+            <form onSubmit={handleSaveReservationSettings} className="space-y-4">
+              {/* Enable / Disable Switch */}
+              <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800">
+                <div>
+                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200 block">
+                    فعال‌سازی نوتیفیکیشن و آلارم سراسری رزروها
+                  </span>
+                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                    نمایش بنر شناور و پخش زنگ هشدار قبل از فرارسیدن نوبت رزرو مشتری
+                  </span>
+                </div>
+                <div className="flex items-center gap-2.5">
+                  <span
+                    className={`text-xs font-bold transition-colors select-none ${
+                      resvAlertEnabled
+                        ? 'text-[#2596BE]'
+                        : 'text-slate-400 dark:text-slate-500'
+                    }`}
+                  >
+                    {resvAlertEnabled ? 'روشن' : 'خاموش'}
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={resvAlertEnabled}
+                    onClick={() => setResvAlertEnabled((prev) => !prev)}
+                    className={`relative inline-flex h-[28px] w-[52px] shrink-0 items-center rounded-full transition-colors duration-200 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#2596BE]/40 shadow-inner ${
+                      resvAlertEnabled
+                        ? 'bg-[#2596BE]'
+                        : 'bg-slate-300 dark:bg-slate-700'
+                    }`}
+                    title={resvAlertEnabled ? 'غیرفعال کردن آلارم صوتی' : 'فعال کردن آلارم صوتی'}
+                  >
+                    <span
+                      className={`absolute top-[3px] flex h-[22px] w-[22px] items-center justify-center rounded-full bg-white shadow-md transition-all duration-200 ${
+                        resvAlertEnabled ? 'right-[27px]' : 'right-[3px]'
+                      }`}
+                    >
+                      {resvAlertEnabled ? (
+                        <Volume2 className="w-3.5 h-3.5 text-[#2596BE]" />
+                      ) : (
+                        <VolumeX className="w-3.5 h-3.5 text-slate-400" />
+                      )}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Advance Reminder Minutes */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    زمان هشدار قبل از ساعت رزرو
+                  </label>
+                  <select
+                    value={resvAlertMinutes}
+                    onChange={(e) => setResvAlertMinutes(Number(e.target.value))}
+                    disabled={!resvAlertEnabled}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs disabled:opacity-50"
+                  >
+                    <option value={10}>۱۰ دقیقه قبل از شروع</option>
+                    <option value={15}>۱۵ دقیقه قبل از شروع</option>
+                    <option value={20}>۲۰ دقیقه قبل از شروع</option>
+                    <option value={30}>۳۰ دقیقه قبل از شروع (پیش‌فرض)</option>
+                    <option value={45}>۴۵ دقیقه قبل از شروع</option>
+                    <option value={60}>۱ ساعت (۶۰ دقیقه) قبل از شروع</option>
+                  </select>
+                </div>
+
+                {/* Alarm Sound Type */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    نوع صدای زنگ آلارم
+                  </label>
+                  <div className="flex gap-2">
+                    <select
+                      value={resvAlertSound}
+                      onChange={(e) => setResvAlertSound(e.target.value as ReservationAlarmSoundType)}
+                      disabled={!resvAlertEnabled}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs disabled:opacity-50"
+                    >
+                      <option value="chime">ملودیک چایم (۴ نت پیانو)</option>
+                      <option value="bell">زنگ ناقوس دوتایی (Desk Bell)</option>
+                      <option value="beep">بوق دیجیتال مدرن (Digital Beep)</option>
+                      <option value="radar">رادار هشدار (Sonar Ping)</option>
+                      <option value="none">بی‌صدا (فقط نمایش بنر تصویری)</option>
+                    </select>
+
+                    <button
+                      type="button"
+                      onClick={() => playReservationAlarmSound(resvAlertSound)}
+                      disabled={!resvAlertEnabled || resvAlertSound === 'none'}
+                      className="px-3 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-700 dark:text-amber-400 border border-amber-500/30 font-bold text-xs flex items-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-40"
+                      title="تست و شنیدن صدای زنگ"
+                    >
+                      <Volume2 className="w-3.5 h-3.5" />
+                      <span>تست صدا</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-800">
+                {resvSettingsSuccess && (
+                  <span className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
+                    <CheckCircle2 className="w-4 h-4" />
+                    تنظیمات آلارم با موفقیت ذخیره شد
+                  </span>
+                )}
+                <button
+                  type="submit"
+                  disabled={resvSettingsLoading}
+                  className="mr-auto px-5 py-2 bg-[#2596BE] hover:bg-[#1E7E9E] text-white text-xs font-bold rounded-xl transition-all cursor-pointer disabled:opacity-50"
+                >
+                  {resvSettingsLoading ? 'در حال ذخیره...' : 'ذخیره تنظیمات آلارم'}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 

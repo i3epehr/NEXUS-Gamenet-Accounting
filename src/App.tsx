@@ -41,8 +41,35 @@ import {
   Calendar,
   Clock,
 } from 'lucide-react';
-import { formatJalaliReadable, getJalaliDateString } from './utils/jalali.ts';
+import { formatJalaliReadable, getJalaliDateString, normalizeDigits } from './utils/jalali.ts';
 import { useLockBodyScroll } from './utils/useLockBodyScroll.ts';
+import { ReservationAlertBanner, ReservationGroupAlert } from './components/ReservationAlertBanner.tsx';
+import { playReservationAlarmSound, sendDesktopNotification } from './utils/audioAlert.ts';
+
+function formatStationTitles(titles: string[]): string {
+  if (titles.length === 0) return '';
+  if (titles.length === 1) return titles[0];
+
+  const parsed = titles.map((t) => {
+    const m = t.match(/^(.+?)\s*(\d+)$/i);
+    return m ? { raw: t, prefix: m[1].trim(), num: parseInt(m[2], 10) } : null;
+  });
+
+  if (parsed.every((p) => p !== null)) {
+    const items = parsed as { raw: string; prefix: string; num: number }[];
+    const firstPrefix = items[0].prefix.toLowerCase();
+    const allSamePrefix = items.every((p) => p.prefix.toLowerCase() === firstPrefix);
+    if (allSamePrefix) {
+      items.sort((a, b) => a.num - b.num);
+      const isConsecutive = items.every((p, idx) => idx === 0 || p.num === items[idx - 1].num + 1);
+      if (isConsecutive && items.length > 1) {
+        return `${items[0].prefix} ${items[0].num} تا ${items[items.length - 1].prefix} ${items[items.length - 1].num} (${items.length} دستگاه)`;
+      }
+    }
+  }
+
+  return titles.join('، ');
+}
 
 export default function App() {
   const [activeTab, setActiveTabState] = useState<ActiveTab>(() => {
@@ -148,6 +175,11 @@ export default function App() {
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginLoading, setLoginLoading] = useState(false);
+
+  // Reservation Real-time Alert & Alarm States
+  const [nowTime, setNowTime] = useState(() => new Date());
+  const [dismissedAlertKeys, setDismissedAlertKeys] = useState<string[]>([]);
+  const alarmedKeysRef = React.useRef<Set<string>>(new Set());
 
   // Lock background page scrolling whenever any modal is open
   useLockBodyScroll(
@@ -270,8 +302,9 @@ export default function App() {
 
     // Background worker: Periodically check if any reservations have arrived at their scheduled time
     const resvTimer = setInterval(async () => {
+      const now = new Date();
+      setNowTime(now);
       try {
-        const now = new Date();
         const clientJalaliDate = getJalaliDateString(now);
         const hh = now.getHours().toString().padStart(2, '0');
         const mm = now.getMinutes().toString().padStart(2, '0');
@@ -287,6 +320,145 @@ export default function App() {
 
     return () => clearInterval(resvTimer);
   }, [fetchData]);
+
+  // Compute active reservation alerts based on settings
+  const activeReservationAlerts = React.useMemo<ReservationGroupAlert[]>(() => {
+    if (!reservations || reservations.length === 0) return [];
+    if (settings?.reservationAlertEnabled === false) return [];
+
+    const alertMinutes = Number(settings?.reservationAlertMinutes) || 30;
+    const clientJalaliDate = getJalaliDateString(nowTime);
+    const currentH = nowTime.getHours();
+    const currentM = nowTime.getMinutes();
+    const nowTotalMinutes = currentH * 60 + currentM;
+
+    // Standardize client Jalali date: "1405/08/13"
+    const normClientParts = normalizeDigits(clientJalaliDate).split('/').map((p) => p.padStart(2, '0'));
+    const stdClientDate =
+      normClientParts.length === 3
+        ? `${normClientParts[0]}/${normClientParts[1]}/${normClientParts[2]}`
+        : clientJalaliDate;
+
+    // Filter confirmed or pending reservations scheduled for today
+    const upcoming = reservations.filter((r) => {
+      // Must be confirmed or pending (NOT completed or cancelled)
+      if (r.status === 'cancelled' || r.status === 'completed') return false;
+      if (!r.startTime) return false;
+
+      // Standardize reservation date
+      const normResvDate = normalizeDigits(r.date || '').replace(/-/g, '/').trim();
+      const resvParts = normResvDate.split('/').map((p) => p.padStart(2, '0'));
+      const stdResvDate =
+        resvParts.length === 3 ? `${resvParts[0]}/${resvParts[1]}/${resvParts[2]}` : normResvDate;
+
+      // If date specified and doesn't match today, skip
+      if (stdResvDate && stdResvDate !== stdClientDate) return false;
+
+      // Parse start time (supports Persian and English digits)
+      const normTime = normalizeDigits(r.startTime).trim();
+      const [startHStr, startMStr] = normTime.split(':');
+      const startH = parseInt(startHStr, 10);
+      const startM = parseInt(startMStr, 10);
+      if (isNaN(startH) || isNaN(startM)) return false;
+
+      const startTotalMinutes = startH * 60 + startM;
+      const diffMinutes = startTotalMinutes - nowTotalMinutes;
+
+      // Alert when within configured reminder minutes before start up to 10 minutes past start
+      return diffMinutes <= alertMinutes && diffMinutes >= -10;
+    });
+
+    if (upcoming.length === 0) return [];
+
+    // Group multi-seat bookings by groupId or (startTime + customerName)
+    const groupMap = new Map<
+      string,
+      {
+        titles: string[];
+        customerName: string;
+        startTime: string;
+        minutesRemaining: number;
+        reservationIds: string[];
+      }
+    >();
+
+    for (const r of upcoming) {
+      const groupKey =
+        r.groupId || `${r.date}_${r.startTime}_${r.customerName.trim().toLowerCase()}`;
+      const normTime = normalizeDigits(r.startTime).trim();
+      const [startHStr, startMStr] = normTime.split(':');
+      const startH = parseInt(startHStr, 10);
+      const startM = parseInt(startMStr, 10);
+      const diffMinutes = startH * 60 + startM - nowTotalMinutes;
+
+      if (!groupMap.has(groupKey)) {
+        groupMap.set(groupKey, {
+          titles: [r.title],
+          customerName: r.customerName,
+          startTime: r.startTime,
+          minutesRemaining: diffMinutes,
+          reservationIds: [r.id],
+        });
+      } else {
+        const item = groupMap.get(groupKey)!;
+        if (!item.titles.includes(r.title)) item.titles.push(r.title);
+        item.reservationIds.push(r.id);
+        item.minutesRemaining = Math.min(item.minutesRemaining, diffMinutes);
+      }
+    }
+
+    const result: ReservationGroupAlert[] = [];
+    for (const [key, val] of groupMap.entries()) {
+      if (dismissedAlertKeys.includes(key)) continue;
+      result.push({
+        key,
+        titles: val.titles,
+        displayTitle: formatStationTitles(val.titles),
+        customerName: val.customerName,
+        startTime: val.startTime,
+        minutesRemaining: val.minutesRemaining,
+        reservationIds: val.reservationIds,
+      });
+    }
+
+    // Sort by soonest first
+    result.sort((a, b) => a.minutesRemaining - b.minutesRemaining);
+    return result;
+  }, [
+    reservations,
+    nowTime,
+    dismissedAlertKeys,
+    settings?.reservationAlertEnabled,
+    settings?.reservationAlertMinutes,
+  ]);
+
+  // Audio chime & notification trigger when an alert first appears
+  useEffect(() => {
+    if (activeReservationAlerts.length === 0) return;
+
+    let shouldSound = false;
+    for (const alert of activeReservationAlerts) {
+      if (!alarmedKeysRef.current.has(alert.key)) {
+        alarmedKeysRef.current.add(alert.key);
+        shouldSound = true;
+
+        const timeText =
+          alert.minutesRemaining <= 0
+            ? 'هم‌اکنون'
+            : `${alert.minutesRemaining} دقیقه دیگر`;
+
+        sendDesktopNotification(
+          'یادآوری رزرو نوبت گیم‌نت',
+          `سیستم‌های ${alert.displayTitle} برای ${alert.customerName} در ساعت ${alert.startTime} رزرو شده است (${timeText}).`
+        );
+      }
+    }
+
+    if (shouldSound) {
+      const soundType = settings?.reservationAlertSound || 'chime';
+      playReservationAlarmSound(soundType);
+    }
+  }, [activeReservationAlerts, settings?.reservationAlertSound]);
 
   // Unified Sales & Expense Instant Checkout Handler
   const handleUnifiedInstantCheckout = async (data: {
@@ -306,6 +478,7 @@ export default function App() {
     categoryId?: string;
     customerName?: string;
     customerPhone?: string;
+    smartLaunchId?: string;
     date: string;
     jalaliDate: string;
     paymentMethod: 'cash' | 'pos' | 'credit' | 'wallet' | 'split';
@@ -346,6 +519,7 @@ export default function App() {
       personId: data.personId,
       customerName: data.customerName,
       customerPhone: data.customerPhone,
+      smartLaunchId: data.smartLaunchId,
       paymentMethod: data.paymentMethod,
       walletAmount: data.walletAmount,
       cashOrPosAmount: data.cashOrPosAmount,
@@ -743,6 +917,13 @@ export default function App() {
         onClose={() => setReceiptModalTx(null)}
         transaction={receiptModalTx}
         settings={settings}
+      />
+
+      {/* Global Real-time Reservation Notification Alert Banner with Audio Chime */}
+      <ReservationAlertBanner
+        alerts={activeReservationAlerts}
+        onDismiss={(key) => setDismissedAlertKeys((prev) => [...prev, key])}
+        onNavigateToReservations={() => setActiveTabState('tabs')}
       />
 
 

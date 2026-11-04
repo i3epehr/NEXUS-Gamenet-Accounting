@@ -349,6 +349,7 @@ export const api = {
     personId?: string;
     customerName?: string;
     customerPhone?: string;
+    smartLaunchId?: string;
     notes?: string;
   }): Promise<OpenTab & { persons?: Person[] }> {
     return fetchJson('/api/tabs', {
@@ -402,10 +403,13 @@ export const api = {
       personId?: string;
       customerName?: string;
       customerPhone?: string;
+      smartLaunchId?: string;
       walletAmount?: number;
       cashOrPosAmount?: number;
       date: string;
       jalaliDate: string;
+      settleScope?: 'all' | 'buffet' | 'custom_amount';
+      customAmount?: number;
       smartLaunchSettlement?: {
         amount: number;
         durationMinutes: number;
@@ -413,7 +417,7 @@ export const api = {
         smartLaunchId?: string;
       };
     }
-  ): Promise<{ success: boolean; transaction: Transaction; message: string; persons?: Person[] }> {
+  ): Promise<{ success: boolean; transaction: Transaction; tab?: OpenTab; message: string; persons?: Person[] }> {
     return fetchJson(`/api/tabs/${id}/checkout`, {
       method: 'POST',
       body: JSON.stringify(data),
@@ -658,6 +662,7 @@ export const api = {
     personId?: string;
     customerName?: string;
     customerPhone?: string;
+    smartLaunchId?: string;
     paymentMethod: 'cash' | 'pos' | 'credit' | 'wallet' | 'split';
     walletAmount?: number;
     cashOrPosAmount?: number;

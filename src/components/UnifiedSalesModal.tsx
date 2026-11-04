@@ -56,6 +56,7 @@ interface UnifiedSalesModalProps {
     personId?: string;
     customerName?: string;
     customerPhone?: string;
+    smartLaunchId?: string;
     description?: string;
     categoryId?: string;
     date: string;
@@ -169,6 +170,7 @@ export const UnifiedSalesModal: React.FC<UnifiedSalesModalProps> = ({
   const [customerSource, setCustomerSource] = useState<'existing' | 'new'>('existing');
   const [manualCustomerName, setManualCustomerName] = useState('');
   const [manualCustomerPhone, setManualCustomerPhone] = useState('');
+  const [manualSmartLaunchId, setManualSmartLaunchId] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<'pos' | 'cash' | 'credit' | 'wallet'>('pos');
   const [walletAmount, setWalletAmount] = useState<number>(0);
   const [customJalaliDate, setCustomJalaliDate] = useState(() => getJalaliDateString());
@@ -255,6 +257,7 @@ export const UnifiedSalesModal: React.FC<UnifiedSalesModalProps> = ({
       setCustomerSource('existing');
       setManualCustomerName('');
       setManualCustomerPhone('');
+      setManualSmartLaunchId('');
       setWalletAmount(0);
       setShowDeskAndCategory(false);
 
@@ -493,8 +496,8 @@ export const UnifiedSalesModal: React.FC<UnifiedSalesModalProps> = ({
           setError('برای پرداخت نسیه، انتخاب شخص بدهکار الزامی است.');
           return;
         }
-        if (customerSource === 'new' && !manualCustomerName.trim()) {
-          setError('برای پرداخت نسیه، وارد کردن نام مشتری الزامی است.');
+        if (customerSource === 'new' && !manualCustomerName.trim() && !manualSmartLaunchId.trim()) {
+          setError('برای پرداخت نسیه، وارد کردن نام یا شناسه اسمارت‌لانچ مشتری الزامی است.');
           return;
         }
       }
@@ -515,9 +518,13 @@ export const UnifiedSalesModal: React.FC<UnifiedSalesModalProps> = ({
       const finalCashOrPosAmt = isSplit ? grandAmount - effWallet : (isWallet ? 0 : grandAmount);
       const accToUse = (paymentMethod === 'credit' || (isWallet && !isSplit)) ? undefined : selectedAccountId;
 
-      const customerNameVal = customerSource === 'new' ? manualCustomerName.trim() : selectedPerson?.name;
+      const smartLaunchIdVal = manualSmartLaunchId.trim() || undefined;
+      const effectiveNewCustomerName =
+        manualCustomerName.trim() ||
+        (smartLaunchIdVal ? `کاربر ${smartLaunchIdVal}` : '');
+      const customerNameVal = customerSource === 'new' ? effectiveNewCustomerName : selectedPerson?.name;
       const personIdVal = customerSource === 'existing' ? (selectedPersonId || undefined) : undefined;
-      const newCustomerNameVal = customerSource === 'new' ? (manualCustomerName.trim() || undefined) : undefined;
+      const newCustomerNameVal = customerSource === 'new' ? (effectiveNewCustomerName || undefined) : undefined;
       const newCustomerPhoneVal = customerSource === 'new' ? (manualCustomerPhone.trim() || undefined) : undefined;
 
       if (activeMode === 'expense') {
@@ -560,6 +567,7 @@ export const UnifiedSalesModal: React.FC<UnifiedSalesModalProps> = ({
           personId: personIdVal,
           customerName: newCustomerNameVal,
           customerPhone: newCustomerPhoneVal,
+          smartLaunchId: smartLaunchIdVal,
           paymentMethod: finalMethod,
           walletAmount: finalWalletAmt,
           cashOrPosAmount: finalCashOrPosAmt,
@@ -585,6 +593,7 @@ export const UnifiedSalesModal: React.FC<UnifiedSalesModalProps> = ({
           personId: personIdVal,
           customerName: newCustomerNameVal,
           customerPhone: newCustomerPhoneVal,
+          smartLaunchId: smartLaunchIdVal,
           paymentMethod: finalMethod,
           walletAmount: finalWalletAmt,
           cashOrPosAmount: finalCashOrPosAmt,
@@ -1271,6 +1280,7 @@ export const UnifiedSalesModal: React.FC<UnifiedSalesModalProps> = ({
                     isManualNew={customerSource === 'new'}
                     manualCustomerName={manualCustomerName}
                     manualCustomerPhone={manualCustomerPhone}
+                    manualSmartLaunchId={manualSmartLaunchId}
                     onManualToggle={(isManual) => {
                       setCustomerSource(isManual ? 'new' : 'existing');
                       if (isManual) {
@@ -1279,6 +1289,13 @@ export const UnifiedSalesModal: React.FC<UnifiedSalesModalProps> = ({
                     }}
                     onManualNameChange={setManualCustomerName}
                     onManualPhoneChange={setManualCustomerPhone}
+                    onManualSmartLaunchIdChange={setManualSmartLaunchId}
+                    onQuickCreateWithId={(term) => {
+                      setCustomerSource('new');
+                      setManualCustomerName(term);
+                      setManualSmartLaunchId(term);
+                      setPaymentMethod('credit');
+                    }}
                     label="مشتری"
                     placeholder="جستجو با نام، شماره یا شناسه..."
                     emptyLabel="مشتری آزاد"
@@ -1371,6 +1388,14 @@ export const UnifiedSalesModal: React.FC<UnifiedSalesModalProps> = ({
                       </div>
                     )}
                   </div>
+                </div>
+              )}
+
+              {/* Debt Notice for Credit */}
+              {paymentMethod === 'credit' && (
+                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 flex items-center gap-2 text-xs text-amber-700 dark:text-amber-400 font-medium">
+                  <CreditCard className="w-4 h-4 shrink-0" />
+                  <span>ثبت نسیه: مبلغ این فاکتور به عنوان بدهکاری مشتری ثبت شده و وارد دخل نقدی نمی‌شود.</span>
                 </div>
               )}
 

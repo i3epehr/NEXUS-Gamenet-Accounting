@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Search, User, Wallet, Check, X, ChevronDown } from 'lucide-react';
+import { Search, User, Wallet, Check, X, ChevronDown, Plus } from 'lucide-react';
 import { Person } from '../types/index.ts';
 import { formatToman } from '../utils/jalali.ts';
 
@@ -12,9 +12,12 @@ export interface SearchablePersonSelectProps {
   isManualNew?: boolean;
   manualCustomerName?: string;
   manualCustomerPhone?: string;
+  manualSmartLaunchId?: string;
   onManualToggle?: (isManual: boolean) => void;
   onManualNameChange?: (name: string) => void;
   onManualPhoneChange?: (phone: string) => void;
+  onManualSmartLaunchIdChange?: (id: string) => void;
+  onQuickCreateWithId?: (idOrName: string) => void;
   // Labels & placeholders
   label?: string;
   placeholder?: string;
@@ -34,11 +37,14 @@ export const SearchablePersonSelect: React.FC<SearchablePersonSelectProps> = ({
   isManualNew = false,
   manualCustomerName = '',
   manualCustomerPhone = '',
+  manualSmartLaunchId = '',
   onManualToggle,
   onManualNameChange,
   onManualPhoneChange,
+  onManualSmartLaunchIdChange,
+  onQuickCreateWithId,
   label,
-  placeholder = 'جستجوی نام یا شماره تماس...',
+  placeholder = 'جستجوی نام، آیدی یا شماره تماس...',
   emptyLabel = 'مشتری آزاد',
   filterType = 'all',
   showBalanceBadge = true,
@@ -147,7 +153,7 @@ export const SearchablePersonSelect: React.FC<SearchablePersonSelectProps> = ({
 
       {/* Manual New Customer Input Mode */}
       {allowManualNew && isManualNew ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <div className={`grid grid-cols-1 ${onManualSmartLaunchIdChange ? 'sm:grid-cols-3' : 'sm:grid-cols-2'} gap-2`}>
           <div>
             <input
               type="text"
@@ -158,6 +164,17 @@ export const SearchablePersonSelect: React.FC<SearchablePersonSelectProps> = ({
               className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs font-semibold focus:ring-2 focus:ring-[#2596BE]/30 focus:border-[#2596BE]"
             />
           </div>
+          {onManualSmartLaunchIdChange && (
+            <div>
+              <input
+                type="text"
+                value={manualSmartLaunchId || ''}
+                onChange={(e) => onManualSmartLaunchIdChange(e.target.value)}
+                placeholder="آیدی کاربری / اسمارت‌لانچ"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs font-mono focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500"
+              />
+            </div>
+          )}
           <div>
             <input
               type="text"
@@ -200,6 +217,11 @@ export const SearchablePersonSelect: React.FC<SearchablePersonSelectProps> = ({
                   <span className="font-bold text-slate-900 dark:text-white truncate">
                     {selectedPerson.name}
                   </span>
+                  {selectedPerson.smartLaunchId && (
+                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 font-mono font-bold shrink-0">
+                      SL: {selectedPerson.smartLaunchId}
+                    </span>
+                  )}
                   {selectedPerson.phone && (
                     <span className="text-[11px] text-slate-400 font-mono hidden sm:inline">
                       ({selectedPerson.phone})
@@ -247,9 +269,33 @@ export const SearchablePersonSelect: React.FC<SearchablePersonSelectProps> = ({
                   {!selectedPersonId && <Check className="w-3.5 h-3.5 text-[#2596BE]" />}
                 </div>
 
+                {/* Quick Add with Search Query if typed */}
+                {searchTerm.trim().length > 0 && (
+                  <div
+                    onClick={() => {
+                      const cleanTerm = searchTerm.trim();
+                      if (onQuickCreateWithId) {
+                        onQuickCreateWithId(cleanTerm);
+                      } else if (onManualToggle) {
+                        onManualToggle(true);
+                        if (onManualNameChange) onManualNameChange(cleanTerm);
+                        if (onManualSmartLaunchIdChange) onManualSmartLaunchIdChange(cleanTerm);
+                      }
+                      setIsOpen(false);
+                      setSearchTerm('');
+                    }}
+                    className="px-3 py-2 rounded-xl text-xs flex items-center gap-2 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 cursor-pointer font-bold border-b border-indigo-100 dark:border-indigo-950/50"
+                  >
+                    <Plus className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">
+                      ثبت آیدی / شخص «<span className="font-mono text-indigo-700 dark:text-indigo-300">{searchTerm.trim()}</span>» به عنوان مشتری جدید (نسیه سریع)
+                    </span>
+                  </div>
+                )}
+
                 {filteredPersons.length === 0 ? (
                   <div className="p-4 text-center text-xs text-slate-400">
-                    مشتری با این مشخصات یافت نشد
+                    مشتری ثبت‌شده با این مشخصات یافت نشد
                   </div>
                 ) : (
                   filteredPersons.map((p) => {
@@ -266,19 +312,28 @@ export const SearchablePersonSelect: React.FC<SearchablePersonSelectProps> = ({
                       >
                         <div className="flex items-center gap-2 min-w-0">
                           <User className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-[#2596BE]' : 'text-slate-400'}`} />
-                          <div className="truncate">
+                          <div className="truncate flex items-center gap-2">
                             <span className="font-semibold block truncate">{p.name}</span>
-                            {p.phone && <span className="text-[10px] text-slate-400 font-mono">{p.phone}</span>}
+                            {p.smartLaunchId && (
+                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 font-mono font-bold shrink-0">
+                                SL: {p.smartLaunchId}
+                              </span>
+                            )}
+                            {p.phone && <span className="text-[10px] text-slate-400 font-mono">({p.phone})</span>}
                           </div>
                         </div>
 
-                        {/* Balance Badge (only positive wallet credit, never debt) */}
+                        {/* Balance Badge */}
                         <div className="flex items-center gap-1.5 shrink-0">
-                          {showBalanceBadge && p.currentBalance < 0 && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-md font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-                              کیف پول: {formatToman(Math.abs(p.currentBalance))}
+                          {p.currentBalance > 0 ? (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-md font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 font-mono">
+                              بدهی: {formatToman(p.currentBalance)}
                             </span>
-                          )}
+                          ) : showBalanceBadge && p.currentBalance < 0 ? (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-md font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-mono">
+                              شارژ: {formatToman(Math.abs(p.currentBalance))}
+                            </span>
+                          ) : null}
                           {isSelected && <Check className="w-3.5 h-3.5 text-[#2596BE]" />}
                         </div>
                       </div>
@@ -291,13 +346,24 @@ export const SearchablePersonSelect: React.FC<SearchablePersonSelectProps> = ({
         </div>
       )}
 
-      {/* Selected Person Wallet Badge (Only if has wallet credit, no debt) */}
-      {!isManualNew && selectedPerson && showBalanceBadge && selectedPerson.currentBalance < 0 && (
+      {/* Selected Person Wallet Badge or Debt Badge */}
+      {!isManualNew && selectedPerson && (
         <div className="flex items-center gap-2 pt-0.5 text-[11px]">
-          <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
-            <Wallet className="w-3 h-3" />
-            کیف پول: +{formatToman(Math.abs(selectedPerson.currentBalance))} تومان
-          </span>
+          {selectedPerson.currentBalance < 0 ? (
+            <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
+              <Wallet className="w-3 h-3" />
+              کیف پول: +{formatToman(Math.abs(selectedPerson.currentBalance))} تومان
+            </span>
+          ) : selectedPerson.currentBalance > 0 ? (
+            <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 font-bold flex items-center gap-1">
+              مانده بدهی قبلی: {formatToman(selectedPerson.currentBalance)} تومان
+            </span>
+          ) : null}
+          {selectedPerson.smartLaunchId && (
+            <span className="text-slate-400 font-mono text-[10px]">
+              (آیدی سیستم: {selectedPerson.smartLaunchId})
+            </span>
+          )}
         </div>
       )}
     </div>

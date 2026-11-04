@@ -1182,14 +1182,19 @@ app.get('/api/dashboard', (_req: Request, res: Response) => {
 
   db.transactions.forEach((tx) => {
     const txDate = new Date(tx.date);
-    if (tx.type === 'income') {
+    const isCreditTx =
+      tx.paymentMethod === 'credit' ||
+      (tx as any).isCredit ||
+      (!tx.toAccountId && (tx.description?.includes('نسیه') || tx.description?.includes('[نسیه]')));
+
+    if ((tx.type === 'income' && !isCreditTx) || tx.type === 'receivable_collection') {
       if (txDate >= todayStart) todayIncome += tx.amount;
       if (txDate >= monthStart) {
         monthIncome += tx.amount;
         const cat = tx.categoryName || 'سایر';
         categoryIncomeMap[cat] = (categoryIncomeMap[cat] || 0) + tx.amount;
       }
-    } else if (tx.type === 'expense') {
+    } else if (tx.type === 'expense' || tx.type === 'debt_settlement') {
       if (txDate >= todayStart) todayExpense += tx.amount;
       if (txDate >= monthStart) {
         monthExpense += tx.amount;
@@ -1239,8 +1244,13 @@ app.get('/api/dashboard', (_req: Request, res: Response) => {
     db.transactions.forEach((tx) => {
       const d = new Date(tx.date);
       if (d >= dayStart && d <= dayEnd) {
-        if (tx.type === 'income') inc += tx.amount;
-        else if (tx.type === 'expense') exp += tx.amount;
+        const isCreditTx =
+          tx.paymentMethod === 'credit' ||
+          (tx as any).isCredit ||
+          (!tx.toAccountId && (tx.description?.includes('نسیه') || tx.description?.includes('[نسیه]')));
+
+        if ((tx.type === 'income' && !isCreditTx) || tx.type === 'receivable_collection') inc += tx.amount;
+        else if (tx.type === 'expense' || tx.type === 'debt_settlement') exp += tx.amount;
       }
     });
 
@@ -1469,8 +1479,16 @@ app.post('/api/transactions', (req: Request, res: Response) => {
   let person: Person | undefined;
   if (personId) {
     person = db.persons.find((p) => p.id === personId);
-  } else if (req.body.customerName || req.body.personName) {
-    person = findOrCreateCustomer(db, req.body.customerName || req.body.personName, req.body.customerPhone);
+  }
+  if (!person && (req.body.customerName || req.body.personName || req.body.smartLaunchId)) {
+    person = findOrCreateCustomer(
+      db,
+      req.body.customerName || req.body.personName,
+      req.body.customerPhone,
+      req.body.smartLaunchId
+    );
+  } else if (person && req.body.smartLaunchId && !person.smartLaunchId) {
+    person.smartLaunchId = req.body.smartLaunchId.trim();
   }
 
   let category: Category | undefined;
@@ -1517,6 +1535,8 @@ app.post('/api/transactions', (req: Request, res: Response) => {
     personId: person?.id,
     personName: person?.name,
     description: description || (type === 'income' ? 'درآمد متفرقه' : 'هزینه متفرقه'),
+    paymentMethod: paymentMethod as any,
+    isCredit: paymentMethod === 'credit',
     receiptItems,
     createdBy: 'مدیر',
     createdAt: nowIso,
@@ -2469,19 +2489,30 @@ function checkAndAutoOpenDueReservations(
   return { openedCount: openedTabs.length, openedTabs };
 }
 
-// Helper to auto-create customer in db.persons whenever manually entered
-function findOrCreateCustomer(db: DatabaseSchema, name?: string, phone?: string): Person | undefined {
-  if (!name || !name.trim()) return undefined;
-  const cleanName = name.trim();
+// Helper to auto-create customer in db.persons whenever manually entered or entered by SmartLaunch ID
+function findOrCreateCustomer(
+  db: DatabaseSchema,
+  name?: string,
+  phone?: string,
+  smartLaunchId?: string
+): Person | undefined {
+  const cleanSmartLaunch = smartLaunchId?.trim() || undefined;
+  const cleanName = name?.trim() || (cleanSmartLaunch ? `کاربر ${cleanSmartLaunch}` : undefined);
   const cleanPhone = phone?.trim() || undefined;
 
+  if (!cleanName && !cleanSmartLaunch && !cleanPhone) return undefined;
+
   const existing = db.persons.find((p) => {
-    const nameMatch = p.name.trim().toLowerCase() === cleanName.toLowerCase();
+    const slMatch = cleanSmartLaunch && p.smartLaunchId && p.smartLaunchId.trim().toLowerCase() === cleanSmartLaunch.toLowerCase();
+    const nameMatch = cleanName && p.name.trim().toLowerCase() === cleanName.toLowerCase();
     const phoneMatch = cleanPhone && p.phone && p.phone.trim() === cleanPhone;
-    return nameMatch || phoneMatch;
+    return slMatch || nameMatch || phoneMatch;
   });
 
   if (existing) {
+    if (cleanSmartLaunch && !existing.smartLaunchId) {
+      existing.smartLaunchId = cleanSmartLaunch;
+    }
     if (cleanPhone && !existing.phone) {
       existing.phone = cleanPhone;
     }
@@ -2490,8 +2521,9 @@ function findOrCreateCustomer(db: DatabaseSchema, name?: string, phone?: string)
 
   const newPerson: Person = {
     id: `per_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-    name: cleanName,
+    name: cleanName || `کاربر ${cleanSmartLaunch}`,
     phone: cleanPhone,
+    smartLaunchId: cleanSmartLaunch,
     type: 'customer',
     currentBalance: 0,
     maxCreditLimit: 500000,
@@ -2499,7 +2531,13 @@ function findOrCreateCustomer(db: DatabaseSchema, name?: string, phone?: string)
   };
 
   db.persons.unshift(newPerson);
-  logAudit(db, 'person', newPerson.id, 'create', `ثبت خودکار مشتری جدید: ${cleanName}${cleanPhone ? ` (${cleanPhone})` : ''}`);
+  logAudit(
+    db,
+    'person',
+    newPerson.id,
+    'create',
+    `ثبت خودکار مشتری جدید: ${newPerson.name}${cleanSmartLaunch ? ` [آیدی: ${cleanSmartLaunch}]` : ''}${cleanPhone ? ` (${cleanPhone})` : ''}`
+  );
   return newPerson;
 }
 
@@ -2610,10 +2648,21 @@ app.post('/api/tabs/:id/items', (req: Request, res: Response) => {
 
   if (productId) {
     const prod = db.products.find((p) => p.id === productId);
-    if (prod) {
-      finalName = prod.name;
-      finalUnitPrice = prod.sellPrice;
+    if (!prod) {
+      res.status(404).json({ error: 'کالای مورد نظر در سیستم یافت نشد' });
+      return;
     }
+    const currentOnTab = tab.items
+      .filter((it) => it.productId === productId)
+      .reduce((sum, it) => sum + it.quantity, 0);
+    if (currentOnTab + qty > prod.stock) {
+      res.status(400).json({
+        error: `موجودی کالای «${prod.name}» کافی نیست. موجودی انبار و یخچال: ${prod.stock} عدد (در حال حاضر ${currentOnTab} عدد روی میز قرار دارد)`
+      });
+      return;
+    }
+    finalName = prod.name;
+    finalUnitPrice = prod.sellPrice;
   }
 
   const newItem: OpenTabItem = {
@@ -2662,10 +2711,13 @@ function executeTabCheckout(
     personId?: string;
     customerName?: string;
     customerPhone?: string;
+    smartLaunchId?: string;
     walletAmount?: number;
     cashOrPosAmount?: number;
     date?: string;
     jalaliDate?: string;
+    settleScope?: 'all' | 'buffet' | 'custom_amount';
+    customAmount?: number;
     smartLaunchSettlement?: {
       amount: number;
       durationMinutes: number;
@@ -2680,53 +2732,75 @@ function executeTabCheckout(
     personId,
     customerName,
     customerPhone,
+    smartLaunchId,
     date,
     jalaliDate,
+    settleScope = 'all',
+    customAmount,
     smartLaunchSettlement,
   } = options;
 
-  const totalAmount = tab.totalAmount;
   const nowIso = new Date().toISOString();
-
-  // Deduct stock for inventory products
   const receiptItems: ReceiptItem[] = [];
-  for (const item of tab.items) {
-    if (item.productId) {
-      const prod = db.products.find((p) => p.id === item.productId);
-      if (prod) {
-        const { deductedFromFridge, deductedFromWarehouse } = deductProductStock(prod, item.quantity);
-        const detail = deductedFromFridge > 0 && deductedFromWarehouse > 0
-          ? ` (${deductedFromFridge} از یخچال + ${deductedFromWarehouse} از انبار)`
-          : deductedFromFridge > 0
-          ? ` (از یخچال)`
-          : ` (از انبار)`;
 
-        db.inventoryLogs.unshift({
-          id: `inv_tab_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-          productId: prod.id,
-          productName: prod.name,
-          type: 'sale_deduction',
-          quantity: item.quantity,
-          costPerUnit: prod.purchasePrice,
-          sourceLocation: deductedFromFridge > 0 && deductedFromWarehouse > 0 ? 'both' : deductedFromFridge > 0 ? 'fridge' : 'warehouse',
-          reason: `تسویه میز: ${tab.title}${detail}`,
-          date: date || nowIso,
-          createdAt: nowIso,
-        });
-      }
+  let itemsToSettle: OpenTabItem[] = [];
+  let totalAmount = 0;
+  let depositDeduction = 0;
+
+  if (settleScope === 'buffet') {
+    // Settle only buffet / product items on the table
+    itemsToSettle = tab.items.filter((it) => !!it.productId);
+    if (itemsToSettle.length === 0) {
+      itemsToSettle = [...tab.items]; // fallback if no specific productId
     }
-    receiptItems.push({
-      productId: item.productId,
-      productName: item.productName,
-      quantity: item.quantity,
-      unitPrice: item.unitPrice,
-      totalPrice: item.totalPrice,
-    });
+    totalAmount = itemsToSettle.reduce((sum, it) => sum + it.totalPrice, 0);
+  } else if (settleScope === 'custom_amount') {
+    totalAmount = Math.max(0, Number(customAmount) || 0);
+  } else {
+    // Settle all
+    itemsToSettle = [...tab.items];
+    totalAmount = tab.totalAmount;
+    depositDeduction = Number(tab.depositAmount) || 0;
   }
 
-  // Deduct advance deposit (بیعانه رزرو) from checkout payment
-  const depositPaid = Number(tab.depositAmount) || 0;
-  const finalPayable = Math.max(0, totalAmount - depositPaid);
+  // Deduct stock for inventory products being settled
+  if (itemsToSettle.length > 0) {
+    for (const item of itemsToSettle) {
+      if (item.productId) {
+        const prod = db.products.find((p) => p.id === item.productId);
+        if (prod) {
+          const { deductedFromFridge, deductedFromWarehouse } = deductProductStock(prod, item.quantity);
+          const detail = deductedFromFridge > 0 && deductedFromWarehouse > 0
+            ? ` (${deductedFromFridge} از یخچال + ${deductedFromWarehouse} از انبار)`
+            : deductedFromFridge > 0
+            ? ` (از یخچال)`
+            : ` (از انبار)`;
+
+          db.inventoryLogs.unshift({
+            id: `inv_tab_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            productId: prod.id,
+            productName: prod.name,
+            type: 'sale_deduction',
+            quantity: item.quantity,
+            costPerUnit: prod.purchasePrice,
+            sourceLocation: deductedFromFridge > 0 && deductedFromWarehouse > 0 ? 'both' : deductedFromFridge > 0 ? 'fridge' : 'warehouse',
+            reason: `تسویه ${settleScope === 'buffet' ? 'بوفه ' : ''}میز: ${tab.title}${detail}`,
+            date: date || nowIso,
+            createdAt: nowIso,
+          });
+        }
+      }
+      receiptItems.push({
+        productId: item.productId,
+        productName: item.productName,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        totalPrice: item.totalPrice,
+      });
+    }
+  }
+
+  const finalPayable = Math.max(0, totalAmount - depositDeduction);
 
   let walletDeducted = 0;
   let cashOrPosPaid = 0;
@@ -2767,8 +2841,11 @@ function executeTabCheckout(
   const finalPersonId = personId || tab.personId;
   if (finalPersonId) {
     targetPerson = db.persons.find((p) => p.id === finalPersonId);
-  } else if (customerName) {
-    targetPerson = findOrCreateCustomer(db, customerName, customerPhone);
+  }
+  if (!targetPerson && (customerName || smartLaunchId)) {
+    targetPerson = findOrCreateCustomer(db, customerName, customerPhone, smartLaunchId);
+  } else if (targetPerson && smartLaunchId && !targetPerson.smartLaunchId) {
+    targetPerson.smartLaunchId = smartLaunchId.trim();
   }
 
   if (targetPerson) {
@@ -2780,36 +2857,48 @@ function executeTabCheckout(
     }
   }
 
-  // Create income transaction for the settled table
-  const descSuffix = depositPaid > 0 
-    ? ` (کل فاکتور: ${totalAmount.toLocaleString('fa-IR')} ت - کسر بیعانه: ${depositPaid.toLocaleString('fa-IR')} ت = پرداختی: ${finalPayable.toLocaleString('fa-IR')} ت)`
-    : '';
-
   let paymentNote = '';
   if (walletDeducted > 0 && cashOrPosPaid > 0) {
     paymentNote = ` [ترکیبی: کیف پول + واریزی]`;
   } else if (walletDeducted > 0) {
     paymentNote = ` [کیف پول]`;
   } else if (isCredit) {
-    paymentNote = ` [نسیه]`;
+    paymentNote = ` [نسیه${targetPerson?.smartLaunchId ? ` - آیدی: ${targetPerson.smartLaunchId}` : ''}]`;
   } else {
     paymentNote = '';
   }
 
-  const gamingCat = getCategoryForSection(db, 'income', 'gaming', ['میز', 'گیمینگ', 'کنسول', 'بازی']);
+  const categoryScope = settleScope === 'buffet' ? 'buffet' : 'gaming';
+  const categoryKeywords = settleScope === 'buffet' ? ['بوفه', 'خوراکی', 'فروش'] : ['میز', 'گیمینگ', 'کنسول', 'بازی'];
+  const incomeCat = getCategoryForSection(db, 'income', categoryScope, categoryKeywords);
+
+  let desc = '';
+  if (settleScope === 'buffet') {
+    desc = `تسویه بوفه ${tab.title} (${itemsToSettle.map((i) => `${i.productName} × ${i.quantity}`).join(' + ')})${paymentNote}`;
+  } else if (settleScope === 'custom_amount') {
+    desc = `تسویه علی‌الحساب مبلغ ${finalPayable.toLocaleString('fa-IR')} ت از ${tab.title}${paymentNote}`;
+  } else {
+    const descSuffix = depositDeduction > 0
+      ? ` (کل فاکتور: ${totalAmount.toLocaleString('fa-IR')} ت - کسر بیعانه: ${depositDeduction.toLocaleString('fa-IR')} ت = پرداختی: ${finalPayable.toLocaleString('fa-IR')} ت)`
+      : '';
+    desc = `تسویه ${tab.title} (${tab.items.map((i) => `${i.productName} × ${i.quantity}`).join(' + ')})${descSuffix}${paymentNote}`;
+  }
+
   const tx: Transaction = {
     id: `tx_tab_${Date.now()}`,
     type: 'income',
     amount: finalPayable,
     date: date || nowIso,
     jalaliDate: jalaliDate || '',
-    categoryId: gamingCat.id,
-    categoryName: gamingCat.name,
+    categoryId: incomeCat.id,
+    categoryName: incomeCat.name,
     toAccountId: targetAccount?.id,
     toAccountName: targetAccount?.name,
     personId: targetPerson?.id,
     personName: targetPerson?.name,
-    description: `تسویه ${tab.title} (${tab.items.map((i) => `${i.productName} × ${i.quantity}`).join(' + ')})${descSuffix}${paymentNote}`,
+    description: desc,
+    paymentMethod: paymentMethod,
+    isCredit: isCredit,
     tabId: tab.id,
     receiptItems,
     createdBy: 'اپراتور',
@@ -2818,30 +2907,43 @@ function executeTabCheckout(
 
   db.transactions.unshift(tx);
 
-  // Close tab and link transaction id
-  tab.status = 'closed';
-  tab.closedAt = nowIso;
-  tab.checkoutTransactionId = tx.id;
-  tab.updatedAt = nowIso;
+  // Tab updates based on scope
+  if (settleScope === 'buffet') {
+    const settledIds = new Set(itemsToSettle.map((it) => it.id));
+    tab.items = tab.items.filter((it) => !settledIds.has(it.id));
+    tab.totalAmount = tab.items.reduce((sum, it) => sum + (it.totalPrice || 0), 0);
+    tab.updatedAt = nowIso;
+    // Tab remains open for gaming timer!
+  } else if (settleScope === 'custom_amount') {
+    tab.paidAmount = (tab.paidAmount || 0) + finalPayable;
+    tab.updatedAt = nowIso;
+    // Tab remains open!
+  } else {
+    // Close tab and link transaction id
+    tab.status = 'closed';
+    tab.closedAt = nowIso;
+    tab.checkoutTransactionId = tx.id;
+    tab.updatedAt = nowIso;
 
-  // Handle SmartLaunch timer closure
-  if (smartLaunchSettlement) {
-    tab.isTimerActive = false;
-    tab.timerStoppedAt = nowIso;
-    tab.smartLaunchSettled = {
-      settledAt: nowIso,
-      durationMinutes: Number(smartLaunchSettlement.durationMinutes) || 0,
-      hourlyRate: Number(smartLaunchSettlement.hourlyRate) || 0,
-      amount: Number(smartLaunchSettlement.amount) || 0,
-      smartLaunchId: smartLaunchSettlement.smartLaunchId ? String(smartLaunchSettlement.smartLaunchId).trim() : undefined,
-      customerName: customerName || tab.personName || undefined,
-    };
-    if (smartLaunchSettlement.smartLaunchId && targetPerson) {
-      targetPerson.smartLaunchId = smartLaunchSettlement.smartLaunchId.trim();
+    // Handle SmartLaunch timer closure
+    if (smartLaunchSettlement) {
+      tab.isTimerActive = false;
+      tab.timerStoppedAt = nowIso;
+      tab.smartLaunchSettled = {
+        settledAt: nowIso,
+        durationMinutes: Number(smartLaunchSettlement.durationMinutes) || 0,
+        hourlyRate: Number(smartLaunchSettlement.hourlyRate) || 0,
+        amount: Number(smartLaunchSettlement.amount) || 0,
+        smartLaunchId: smartLaunchSettlement.smartLaunchId ? String(smartLaunchSettlement.smartLaunchId).trim() : undefined,
+        customerName: customerName || tab.personName || undefined,
+      };
+      if (smartLaunchSettlement.smartLaunchId && targetPerson) {
+        targetPerson.smartLaunchId = smartLaunchSettlement.smartLaunchId.trim();
+      }
+    } else if (tab.isTimerActive) {
+      tab.isTimerActive = false;
+      tab.timerStoppedAt = nowIso;
     }
-  } else if (tab.isTimerActive) {
-    tab.isTimerActive = false;
-    tab.timerStoppedAt = nowIso;
   }
 
   logAudit(
@@ -2849,7 +2951,7 @@ function executeTabCheckout(
     'tab',
     tab.id,
     'checkout',
-    `تسویه حساب میز ${tab.title}: کل اقلام ${totalAmount} ت (بیعانه ${depositPaid} ت، کیف پول ${walletDeducted} ت، نقد/پوز ${cashOrPosPaid} ت)`
+    `${settleScope === 'buffet' ? 'تسویه بوفه' : settleScope === 'custom_amount' ? 'تسویه علی‌الحساب' : 'تسویه کامل'} میز ${tab.title}: مبلغ ${finalPayable} ت`
   );
 
   return { transaction: tx, tab };
@@ -2865,15 +2967,30 @@ app.post('/api/tabs/:id/checkout', (req: Request, res: Response) => {
     return;
   }
 
-  if (tab.items.length === 0) {
+  const { settleScope = 'all', customAmount } = req.body;
+  if (settleScope === 'all' && tab.items.length === 0 && !tab.isTimerActive && (!tab.timerCalculatedCost || tab.timerCalculatedCost <= 0)) {
     res.status(400).json({ error: 'حساب این میز خالی است' });
+    return;
+  }
+  if (settleScope === 'buffet' && tab.items.length === 0) {
+    res.status(400).json({ error: 'هیچ آیتم بوفه‌ای برای تسویه روی این میز وجود ندارد' });
+    return;
+  }
+  if (settleScope === 'custom_amount' && (!customAmount || Number(customAmount) <= 0)) {
+    res.status(400).json({ error: 'لطفاً مبلغ معتبری برای تسویه وارد کنید' });
     return;
   }
 
   const { transaction } = executeTabCheckout(db, tab, req.body);
   saveDatabase(db);
 
-  res.json({ success: true, transaction, message: 'میز با موفقیت تسویه شد', persons: db.persons });
+  res.json({
+    success: true,
+    transaction,
+    tab,
+    message: settleScope === 'buffet' ? 'اقلام بوفه با موفقیت تسویه شدند (میز باز ماند)' : 'تسویه با موفقیت انجام شد',
+    persons: db.persons,
+  });
 });
 
 // Update item quantity in open tab (increase/decrease)
@@ -2894,12 +3011,25 @@ app.post('/api/tabs/:id/items/:itemId/quantity', (req: Request, res: Response) =
   }
 
   const item = tab.items[itemIndex];
-  if (quantity !== undefined) {
-    item.quantity = Math.max(0, Number(quantity));
-  } else if (delta !== undefined) {
-    item.quantity = Math.max(0, item.quantity + Number(delta));
+  const newQty = quantity !== undefined ? Math.max(0, Number(quantity)) : Math.max(0, item.quantity + Number(delta));
+
+  // Check available stock if quantity is being increased
+  if (item.productId && newQty > item.quantity) {
+    const prod = db.products.find((p) => p.id === item.productId);
+    if (prod) {
+      const otherOnTab = tab.items
+        .filter((it) => it.id !== itemId && it.productId === item.productId)
+        .reduce((sum, it) => sum + it.quantity, 0);
+      if (otherOnTab + newQty > prod.stock) {
+        res.status(400).json({
+          error: `موجودی کالای «${prod.name}» کافی نیست. موجودی انبار و یخچال: ${prod.stock} عدد`
+        });
+        return;
+      }
+    }
   }
 
+  item.quantity = newQty;
   if (item.quantity <= 0) {
     tab.items.splice(itemIndex, 1);
   } else {
@@ -3241,6 +3371,7 @@ app.post('/api/reservations', (req: Request, res: Response) => {
     title,
     customerName,
     customerPhone,
+    smartLaunchId,
     personId,
     date,
     startTime,
@@ -3264,7 +3395,9 @@ app.post('/api/reservations', (req: Request, res: Response) => {
   // Automatically find or create customer in db.persons so manual customers appear in Contacts/Persons list
   let targetPerson = personId ? db.persons.find((p) => p.id === personId) : undefined;
   if (!targetPerson) {
-    targetPerson = findOrCreateCustomer(db, customerName, customerPhone);
+    targetPerson = findOrCreateCustomer(db, customerName, customerPhone, smartLaunchId);
+  } else if (smartLaunchId && !targetPerson.smartLaunchId) {
+    targetPerson.smartLaunchId = smartLaunchId.trim();
   }
   const finalPersonId = targetPerson?.id || undefined;
   const finalCustomerName = targetPerson?.name || customerName.trim();
@@ -3940,12 +4073,15 @@ app.post('/api/checkout/unified', (req: Request, res: Response) => {
   // Handle payments & accounts
   let targetAccount = db.accounts.find((a) => a.id === accountId);
   let person = personId ? db.persons.find((p) => p.id === personId) : undefined;
-  if (!person && (req.body.customerName || req.body.newCustomerName)) {
+  if (!person && (req.body.customerName || req.body.newCustomerName || req.body.smartLaunchId)) {
     person = findOrCreateCustomer(
       db,
       req.body.customerName || req.body.newCustomerName,
-      req.body.customerPhone || req.body.newCustomerPhone
+      req.body.customerPhone || req.body.newCustomerPhone,
+      req.body.smartLaunchId
     );
+  } else if (person && req.body.smartLaunchId && !person.smartLaunchId) {
+    person.smartLaunchId = req.body.smartLaunchId.trim();
   }
 
   let walletDeducted = 0;
@@ -3987,7 +4123,7 @@ app.post('/api/checkout/unified', (req: Request, res: Response) => {
   } else if (walletDeducted > 0) {
     paymentNote = ` [کیف پول]`;
   } else if (isCredit) {
-    paymentNote = ` [نسیه]`;
+    paymentNote = ` [نسیه${person?.smartLaunchId ? ` - آیدی: ${person.smartLaunchId}` : ''}]`;
   }
 
   // Calculate gaming vs buffet items for intelligent accounting category breakdown
@@ -4086,6 +4222,8 @@ app.post('/api/checkout/unified', (req: Request, res: Response) => {
       personId: person?.id,
       personName: person?.name,
       description: txDesc,
+      paymentMethod: paymentMethod,
+      isCredit: paymentMethod === 'credit',
       receiptItems,
       createdBy: 'اپراتور',
       createdAt: nowIso,

@@ -389,10 +389,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <tr key={tx.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors">
                   <td className="py-2.5 px-3">
                     {tx.type === 'income' && (
-                      <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold">
-                        <ArrowDownLeft className="w-3.5 h-3.5" />
-                        درآمد
-                      </span>
+                      (tx.paymentMethod === 'credit' ||
+                      tx.isCredit ||
+                      (!tx.toAccountId && (tx.description?.includes('نسیه') || tx.description?.includes('[نسیه]')))) ? (
+                        <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 font-semibold text-[11px] bg-amber-500/10 px-1.5 py-0.5 rounded-md">
+                          نسیه (طلب)
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold">
+                          <ArrowDownLeft className="w-3.5 h-3.5" />
+                          درآمد
+                        </span>
+                      )
                     )}
                     {tx.type === 'expense' && (
                       <span className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400 font-semibold">

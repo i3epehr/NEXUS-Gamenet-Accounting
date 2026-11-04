@@ -57,6 +57,8 @@ export interface Transaction {
   personId?: string;
   personName?: string;
   description: string;
+  paymentMethod?: 'cash' | 'pos' | 'credit' | 'wallet' | 'split';
+  isCredit?: boolean;
   referenceNumber?: string;
   tabId?: string; // Link to OpenTab if created from desk settlement
   receiptItems?: ReceiptItem[];
@@ -264,6 +266,8 @@ export interface AuditLog {
   timestamp: string;
 }
 
+export type ReservationAlarmSoundType = 'chime' | 'bell' | 'beep' | 'radar' | 'none';
+
 export interface GameNetSettings {
   name: string;
   phone: string;
@@ -275,6 +279,9 @@ export interface GameNetSettings {
   theme: 'dark' | 'light';
   customPersonTypes?: { id: string; label: string }[];
   buffetCategories?: string[];
+  reservationAlertMinutes?: number;
+  reservationAlertSound?: ReservationAlarmSoundType;
+  reservationAlertEnabled?: boolean;
 }
 
 export interface DashboardStats {

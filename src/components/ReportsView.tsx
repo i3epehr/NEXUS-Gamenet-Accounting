@@ -123,11 +123,16 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ transactions, settings
     const expMap: Record<string, number> = {};
 
     filteredTx.forEach((t) => {
-      if (t.type === 'income') {
+      const isCreditTx =
+        t.paymentMethod === 'credit' ||
+        t.isCredit ||
+        (!t.toAccountId && (t.description?.includes('نسیه') || t.description?.includes('[نسیه]')));
+
+      if ((t.type === 'income' && !isCreditTx) || t.type === 'receivable_collection') {
         inc += t.amount;
         const name = t.categoryName || 'درآمد متفرقه';
         incMap[name] = (incMap[name] || 0) + t.amount;
-      } else if (t.type === 'expense') {
+      } else if (t.type === 'expense' || t.type === 'debt_settlement') {
         exp += t.amount;
         const name = t.categoryName || 'هزینه متفرقه';
         expMap[name] = (expMap[name] || 0) + t.amount;

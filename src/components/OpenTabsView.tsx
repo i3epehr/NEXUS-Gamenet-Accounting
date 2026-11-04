@@ -46,7 +46,7 @@ import {
   Reservation,
   Transaction,
 } from '../types/index.ts';
-import { formatJalaliReadable, formatToman, getJalaliDateString } from '../utils/jalali.ts';
+import { formatJalaliReadable, formatToman, getJalaliDateString, normalizeDigits, parseTomanInput } from '../utils/jalali.ts';
 import { ConfirmModal } from './ConfirmModal.tsx';
 import { useLockBodyScroll } from '../utils/useLockBodyScroll.ts';
 import { api } from '../services/api.ts';
@@ -79,10 +79,13 @@ interface OpenTabsViewProps {
       personId?: string;
       customerName?: string;
       customerPhone?: string;
+      smartLaunchId?: string;
       walletAmount?: number;
       cashOrPosAmount?: number;
       date: string;
       jalaliDate: string;
+      settleScope?: 'all' | 'buffet' | 'custom_amount';
+      customAmount?: number;
       smartLaunchSettlement?: {
         amount: number;
         durationMinutes: number;
@@ -178,6 +181,9 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
   const [checkoutCustomerSource, setCheckoutCustomerSource] = useState<'existing' | 'new'>('existing');
   const [checkoutCustomerName, setCheckoutCustomerName] = useState('');
   const [checkoutCustomerPhone, setCheckoutCustomerPhone] = useState('');
+  const [checkoutSmartLaunchId, setCheckoutSmartLaunchId] = useState('');
+  const [checkoutSettleScope, setCheckoutSettleScope] = useState<'all' | 'buffet' | 'custom_amount'>('all');
+  const [checkoutCustomAmount, setCheckoutCustomAmount] = useState('');
   const [checkoutWalletAmount, setCheckoutWalletAmount] = useState<number>(0);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutWithReceipt, setCheckoutWithReceipt] = useState(false);
@@ -221,6 +227,7 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
   const [resvTitle, setResvTitle] = useState('');
   const [resvCustomerName, setResvCustomerName] = useState('');
   const [resvCustomerPhone, setResvCustomerPhone] = useState('');
+  const [resvSmartLaunchId, setResvSmartLaunchId] = useState('');
   const [resvDate, setResvDate] = useState(() => getJalaliDateString());
   const [resvStartTime, setResvStartTime] = useState('18:00');
   const [resvEndTime, setResvEndTime] = useState('20:00');
@@ -423,6 +430,21 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
 
   // Quick Staging Helpers for adding multiple items to open tab
   const handleAddStagingItem = (product: Product) => {
+    const onTabQty = (selectedTabForAdd?.items || [])
+      .filter((it) => it.productId === product.id)
+      .reduce((sum, it) => sum + it.quantity, 0);
+    const effectiveStock = Math.max(0, (product.stock || 0) - onTabQty);
+    if (effectiveStock <= 0) {
+      alert(`کالای «${product.name}» در حال حاضر ناموجود است.`);
+      return;
+    }
+
+    const existing = stagingItems.find((p) => p.productId === product.id);
+    if (existing && existing.quantity >= effectiveStock) {
+      alert(`سقف موجودی قابل سفارش برای «${product.name}» (${effectiveStock} عدد) انتخاب شده است.`);
+      return;
+    }
+
     setStagingItems((prev) => {
       const idx = prev.findIndex((p) => p.productId === product.id);
       if (idx !== -1) {
@@ -464,6 +486,18 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
       if (addItemType === 'buffet') {
         if (stagingItems.length > 0) {
           for (const item of stagingItems) {
+            if (item.productId) {
+              const prod = products.find((p) => p.id === item.productId);
+              if (prod) {
+                const onTabQty = (selectedTabForAdd.items || [])
+                  .filter((it) => it.productId === prod.id)
+                  .reduce((sum, it) => sum + it.quantity, 0);
+                if (onTabQty + item.quantity > prod.stock) {
+                  alert(`موجودی کالای «${prod.name}» کافی نیست. موجودی انبار و یخچال: ${prod.stock} عدد`);
+                  return;
+                }
+              }
+            }
             await onAddItem(selectedTabForAdd.id, {
               productId: item.productId,
               productName: item.productName,
@@ -474,6 +508,13 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
         } else {
           const prod = products.find((p) => p.id === selectedProductId);
           if (!prod) return;
+          const onTabQty = (selectedTabForAdd.items || [])
+            .filter((it) => it.productId === prod.id)
+            .reduce((sum, it) => sum + it.quantity, 0);
+          if (onTabQty + itemQuantity > prod.stock) {
+            alert(`موجودی کالای «${prod.name}» کافی نیست. موجودی انبار و یخچال: ${prod.stock} عدد`);
+            return;
+          }
           await onAddItem(selectedTabForAdd.id, {
             productId: prod.id,
             productName: prod.name,
@@ -506,6 +547,19 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
   };
 
   const handleQuantityChange = async (tabId: string, item: OpenTabItem, delta: number) => {
+    if (delta > 0 && item.productId) {
+      const prod = products.find((p) => p.id === item.productId);
+      if (prod) {
+        const tab = tabs.find((t) => t.id === tabId);
+        const currentQtyOnTab = (tab?.items || [])
+          .filter((it) => it.productId === item.productId)
+          .reduce((sum, it) => sum + it.quantity, 0);
+        if (currentQtyOnTab + delta > prod.stock) {
+          alert(`موجودی کالای «${prod.name}» کافی نیست. موجودی انبار و یخچال: ${prod.stock} عدد`);
+          return;
+        }
+      }
+    }
     try {
       setUpdatingItemId(item.id);
       if (onUpdateItemQuantity) {
@@ -605,9 +659,14 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
     setCheckoutCustomerName(tab.personName || '');
     setCheckoutCustomerPhone('');
     setCheckoutWithReceipt(false);
-    const finalPayable = Math.max(0, tab.totalAmount - (tab.depositAmount || 0));
+    setCheckoutSettleScope('all');
+    setCheckoutCustomAmount('');
 
     const person = tab.personId ? persons.find((p) => p.id === tab.personId) : undefined;
+    setCheckoutSmartLaunchId(person?.smartLaunchId || tab.smartLaunchSettled?.smartLaunchId || '');
+
+    const finalPayable = Math.max(0, tab.totalAmount - (tab.depositAmount || 0));
+
     if (person && person.currentBalance < 0) {
       setCheckoutPaymentMethod('wallet');
       setCheckoutWalletAmount(Math.min(finalPayable, Math.abs(person.currentBalance)));
@@ -639,20 +698,48 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
     if (!selectedTabForCheckout) return;
     const finalPayable = Math.max(0, selectedTabForCheckout.totalAmount - (selectedTabForCheckout.depositAmount || 0));
     const person = persons.find((p) => p.id === pId);
-    if (person && person.currentBalance < 0) {
-      setCheckoutPaymentMethod('wallet');
-      setCheckoutWalletAmount(Math.min(finalPayable, Math.abs(person.currentBalance)));
+    if (person) {
+      if (person.smartLaunchId) {
+        setCheckoutSmartLaunchId(person.smartLaunchId);
+      }
+      if (person.currentBalance < 0) {
+        setCheckoutPaymentMethod('wallet');
+        setCheckoutWalletAmount(Math.min(finalPayable, Math.abs(person.currentBalance)));
+      }
     }
   };
 
   const handleCheckoutSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedTabForCheckout) return;
-    const finalPayable = Math.max(0, selectedTabForCheckout.totalAmount - (selectedTabForCheckout.depositAmount || 0));
 
-    const hasCustomer = checkoutPersonId || (checkoutCustomerSource === 'new' && checkoutCustomerName.trim());
+    const buffetItems = selectedTabForCheckout.items.filter((it) => !!it.productId);
+    const buffetTotal = buffetItems.reduce((sum, it) => sum + it.totalPrice, 0);
+
+    let amountToPay = 0;
+    if (checkoutSettleScope === 'buffet') {
+      amountToPay = buffetTotal;
+      if (amountToPay <= 0) {
+        alert('هیچ آیتم بوفه‌ای روی این میز برای تسویه وجود ندارد.');
+        return;
+      }
+    } else if (checkoutSettleScope === 'custom_amount') {
+      amountToPay = Math.max(0, parseTomanInput(checkoutCustomAmount));
+      if (amountToPay <= 0) {
+        alert('لطفا مبلغ معتبری برای تسویه علی‌الحساب وارد کنید.');
+        return;
+      }
+    } else {
+      amountToPay = Math.max(0, selectedTabForCheckout.totalAmount - (selectedTabForCheckout.depositAmount || 0));
+    }
+
+    const hasCustomer =
+      checkoutPersonId ||
+      checkoutSmartLaunchId.trim() ||
+      (checkoutCustomerSource === 'new' && checkoutCustomerName.trim());
+
     if (checkoutPaymentMethod === 'credit' && !hasCustomer) {
-      alert('لطفا شخص یا مشتری را برای تسویه نسیه انتخاب کنید.');
+      alert('برای پرداخت نسیه، وارد کردن آیدی یا انتخاب مشتری الزامی است.');
       return;
     }
     if (checkoutPaymentMethod === 'wallet' && !checkoutPersonId) {
@@ -663,19 +750,19 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
     try {
       setCheckoutLoading(true);
       const isWallet = checkoutPaymentMethod === 'wallet';
-      const effWallet = isWallet ? (checkoutWalletAmount > 0 ? checkoutWalletAmount : finalPayable) : 0;
-      const isSplit = isWallet && effWallet < finalPayable;
+      const effWallet = isWallet ? (checkoutWalletAmount > 0 ? checkoutWalletAmount : amountToPay) : 0;
+      const isSplit = isWallet && effWallet < amountToPay;
       const finalMethod: 'cash' | 'pos' | 'credit' | 'wallet' | 'split' = isSplit ? 'split' : checkoutPaymentMethod;
       const finalWalletAmt = isWallet ? effWallet : undefined;
-      const finalCashOrPosAmt = isSplit ? finalPayable - effWallet : (isWallet ? 0 : finalPayable);
+      const finalCashOrPosAmt = isSplit ? amountToPay - effWallet : (isWallet ? 0 : amountToPay);
       const accToUse = (checkoutPaymentMethod === 'credit' || (isWallet && !isSplit)) ? undefined : checkoutAccountId;
 
-      // Record SmartLaunch timer settlement if timer was active or stopped
+      // Record SmartLaunch timer settlement if timer was active or stopped (only when closing entire table)
       const isTimerActive = !!selectedTabForCheckout.isTimerActive;
       const hasStoppedTimerCost = !!(selectedTabForCheckout.timerCalculatedCost && selectedTabForCheckout.timerCalculatedCost > 0);
       let smartLaunchSettlement: { amount: number; durationMinutes: number; hourlyRate: number; smartLaunchId?: string } | undefined;
 
-      if (isTimerActive || hasStoppedTimerCost) {
+      if (checkoutSettleScope === 'all' && (isTimerActive || hasStoppedTimerCost)) {
         const elapsedSec = isTimerActive ? getTabTimerElapsedSeconds(selectedTabForCheckout) : 0;
         const mins = isTimerActive ? Math.max(1, Math.ceil(elapsedSec / 60)) : 0;
         const cost = isTimerActive
@@ -688,7 +775,7 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
           amount: cost,
           durationMinutes: mins,
           hourlyRate: selectedTabForCheckout.hourlyRate || 0,
-          smartLaunchId: person?.smartLaunchId || undefined,
+          smartLaunchId: checkoutSmartLaunchId.trim() || person?.smartLaunchId || undefined,
         };
       }
 
@@ -698,8 +785,11 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
         cashOrPosAmount: finalCashOrPosAmt,
         accountId: accToUse,
         personId: checkoutPersonId || undefined,
-        customerName: checkoutCustomerSource === 'new' && checkoutCustomerName.trim() ? checkoutCustomerName.trim() : undefined,
+        customerName: checkoutCustomerName.trim() || undefined,
         customerPhone: checkoutCustomerSource === 'new' && checkoutCustomerPhone.trim() ? checkoutCustomerPhone.trim() : undefined,
+        smartLaunchId: checkoutSmartLaunchId.trim() || undefined,
+        settleScope: checkoutSettleScope,
+        customAmount: checkoutSettleScope === 'custom_amount' ? amountToPay : undefined,
         date: new Date().toISOString(),
         jalaliDate: getJalaliDateString(),
         smartLaunchSettlement,
@@ -753,6 +843,7 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
     setResvTitle('');
     setResvCustomerName('');
     setResvCustomerPhone('');
+    setResvSmartLaunchId('');
     setResvSelectedPersonId('');
     setResvCustomerSource('existing');
     setResvTableCount(1);
@@ -772,7 +863,7 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
     }
     try {
       setResvLoading(true);
-      const data: Partial<Reservation> = {
+      const data: Partial<Reservation> & { smartLaunchId?: string } = {
         title: resvTitle.trim(),
         customerName: resvCustomerName.trim(),
         customerPhone: resvCustomerPhone.trim() || undefined,
@@ -784,6 +875,7 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
         depositAmount: Number(resvDepositAmount) || 0,
         depositAccountId: resvDepositAccountId || undefined,
         notes: resvNotes.trim() || undefined,
+        smartLaunchId: resvSmartLaunchId.trim() || undefined,
       };
 
       if (editingReservation && onUpdateReservation) {
@@ -1658,13 +1750,21 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
                             (p.category && p.category.toLowerCase().includes(addItemSearch.toLowerCase())))
                       )
                       .map((p) => {
+                        const onTabQty = (selectedTabForAdd?.items || [])
+                          .filter((it) => it.productId === p.id)
+                          .reduce((sum, it) => sum + it.quantity, 0);
+                        const effectiveStock = Math.max(0, (p.stock || 0) - onTabQty);
                         const inStage = stagingItems.find((it) => it.productId === p.id);
                         const stagedQty = inStage ? inStage.quantity : 0;
+                        const isOutOfStock = effectiveStock <= 0;
+                        const isMaxReached = stagedQty >= effectiveStock;
                         return (
                           <div
                             key={p.id}
                             className={`p-3 rounded-2xl border transition-all flex flex-col justify-between gap-2 ${
-                              stagedQty > 0
+                              isOutOfStock
+                                ? 'border-slate-200/60 dark:border-slate-800/60 bg-slate-50/50 dark:bg-slate-900/20 opacity-75'
+                                : stagedQty > 0
                                 ? 'border-[#2596BE] bg-[#2596BE]/5 shadow-xs'
                                 : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/40 hover:border-slate-300'
                             }`}
@@ -1686,14 +1786,14 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
                                 </span>
                                 <span
                                   className={`text-[10px] font-mono ${
-                                    p.stock <= 0
-                                      ? 'text-rose-500 font-bold'
-                                      : p.stock <= 5
-                                      ? 'text-amber-500'
+                                    isOutOfStock
+                                      ? 'text-rose-500 font-bold bg-rose-50 dark:bg-rose-950/40 px-1 py-0.5 rounded'
+                                      : effectiveStock <= 5
+                                      ? 'text-amber-500 font-semibold'
                                       : 'text-slate-400'
                                   }`}
                                 >
-                                  کل: {p.stock} {p.unit || 'عدد'}
+                                  {isOutOfStock ? 'ناموجود' : `موجودی: ${effectiveStock} ${p.unit || 'عدد'}`}
                                 </span>
                               </div>
                               <div className="flex items-center gap-1.5 flex-wrap text-[10px] pt-0.5">
@@ -1724,12 +1824,27 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
                                   </span>
                                   <button
                                     type="button"
+                                    disabled={isMaxReached}
                                     onClick={() => handleAddStagingItem(p)}
-                                    className="p-1 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 rounded-lg cursor-pointer"
+                                    className={`p-1 rounded-lg cursor-pointer transition-colors ${
+                                      isMaxReached
+                                        ? 'opacity-30 cursor-not-allowed text-slate-400'
+                                        : 'text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/40'
+                                    }`}
+                                    title={isMaxReached ? 'سقف موجودی در انبار و یخچال رسیده است' : 'افزایش تعداد'}
                                   >
                                     <Plus className="w-3.5 h-3.5" />
                                   </button>
                                 </div>
+                              ) : isOutOfStock ? (
+                                <button
+                                  type="button"
+                                  disabled={true}
+                                  className="w-full py-1.5 px-3 rounded-xl bg-slate-100 dark:bg-slate-800/80 text-rose-500/80 dark:text-rose-400/80 text-xs font-bold transition-all cursor-not-allowed flex items-center justify-center gap-1.5 border border-dashed border-rose-300/40 dark:border-rose-900/40"
+                                >
+                                  <AlertCircle className="w-3.5 h-3.5" />
+                                  <span>ناموجود</span>
+                                </button>
                               ) : (
                                 <button
                                   type="button"
@@ -2043,30 +2158,134 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
                 </div>
               )}
 
-              {/* Total & Deposit Deduction Breakdown */}
-              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-500 font-medium">جمع کل سفارشات میز:</span>
-                  <span className="font-bold tabular-nums text-slate-800 dark:text-slate-200">
-                    {formatToman(selectedTabForCheckout.totalAmount)} تومان
-                  </span>
-                </div>
-                {selectedTabForCheckout.depositAmount && selectedTabForCheckout.depositAmount > 0 ? (
-                  <div className="flex items-center justify-between text-xs text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-500/10 px-2.5 py-1.5 rounded-xl border border-emerald-500/20">
-                    <span>بیعانه پرداختی در رزرو (کسر از فاکتور):</span>
-                    <span className="tabular-nums font-mono">
-                      - {formatToman(selectedTabForCheckout.depositAmount)} تومان
-                    </span>
-                  </div>
-                ) : null}
-                <div className="pt-2 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between">
-                  <span className="text-xs font-bold text-[#2596BE]">مبلغ خالص قابل دریافت در تسویه:</span>
-                  <div className="text-lg font-black text-slate-900 dark:text-white tabular-nums">
-                    {formatToman(Math.max(0, selectedTabForCheckout.totalAmount - (selectedTabForCheckout.depositAmount || 0)))}
-                    <span className="text-xs font-normal text-slate-400 mr-1">تومان</span>
-                  </div>
-                </div>
-              </div>
+              {/* Settle Scope Selection */}
+              {(() => {
+                const buffetItems = selectedTabForCheckout.items.filter((it) => !!it.productId);
+                const buffetTotal = buffetItems.reduce((sum, it) => sum + it.totalPrice, 0);
+                const remainingFullTable = Math.max(0, selectedTabForCheckout.totalAmount - (selectedTabForCheckout.depositAmount || 0));
+                const currentPayableAmount =
+                  checkoutSettleScope === 'buffet'
+                    ? buffetTotal
+                    : checkoutSettleScope === 'custom_amount'
+                    ? Math.max(0, parseTomanInput(checkoutCustomAmount))
+                    : remainingFullTable;
+
+                return (
+                  <>
+                    <div className="space-y-1.5">
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                        محدوده و بخش مورد نظر برای تسویه:
+                      </label>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setCheckoutSettleScope('all')}
+                          className={`p-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer flex flex-col items-center justify-center gap-1 ${
+                            checkoutSettleScope === 'all'
+                              ? 'border-[#2596BE] bg-[#2596BE]/10 text-[#2596BE] ring-2 ring-[#2596BE]/30'
+                              : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                          }`}
+                        >
+                          <span>تسویه کامل میز</span>
+                          <span className="text-[10px] font-mono text-slate-500">
+                            ({formatToman(remainingFullTable)} ت - بستن میز)
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setCheckoutSettleScope('buffet')}
+                          className={`p-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer flex flex-col items-center justify-center gap-1 ${
+                            checkoutSettleScope === 'buffet'
+                              ? 'border-emerald-600 bg-emerald-600/10 text-emerald-600 ring-2 ring-emerald-600/30'
+                              : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                          }`}
+                        >
+                          <span>فقط اقلام بوفه</span>
+                          <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400">
+                            ({formatToman(buffetTotal)} ت - میز باز می‌ماند)
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setCheckoutSettleScope('custom_amount')}
+                          className={`p-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer flex flex-col items-center justify-center gap-1 ${
+                            checkoutSettleScope === 'custom_amount'
+                              ? 'border-purple-600 bg-purple-600/10 text-purple-600 ring-2 ring-purple-600/30'
+                              : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                          }`}
+                        >
+                          <span>مبلغ دلخواه (علی‌الحساب)</span>
+                          <span className="text-[10px] text-slate-400">میز باز می‌ماند</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Custom Amount input if chosen */}
+                    {checkoutSettleScope === 'custom_amount' && (
+                      <div className="p-3.5 rounded-2xl bg-purple-500/10 border border-purple-500/30 space-y-1.5 animate-in fade-in">
+                        <label className="text-xs font-bold text-purple-700 dark:text-purple-300 block">
+                          مبلغ مورد نظر برای تسویه (تومان):
+                        </label>
+                        <input
+                          type="text"
+                          value={checkoutCustomAmount}
+                          onChange={(e) => setCheckoutCustomAmount(normalizeDigits(e.target.value))}
+                          placeholder="مثلا: 50,000"
+                          className="w-full px-3 py-2 rounded-xl border border-purple-300 dark:border-purple-700 bg-white dark:bg-slate-900 text-xs font-mono font-bold"
+                        />
+                      </div>
+                    )}
+
+                    {/* Total & Deposit Deduction Breakdown */}
+                    <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-500 font-medium">
+                          {checkoutSettleScope === 'buffet'
+                            ? 'مجموع اقلام بوفه میز:'
+                            : checkoutSettleScope === 'custom_amount'
+                            ? 'مبلغ انتخابی تسویه:'
+                            : 'جمع کل سفارشات میز:'}
+                        </span>
+                        <span className="font-bold tabular-nums text-slate-800 dark:text-slate-200">
+                          {formatToman(
+                            checkoutSettleScope === 'buffet'
+                              ? buffetTotal
+                              : checkoutSettleScope === 'custom_amount'
+                              ? currentPayableAmount
+                              : selectedTabForCheckout.totalAmount
+                          )}{' '}
+                          تومان
+                        </span>
+                      </div>
+
+                      {checkoutSettleScope === 'all' && selectedTabForCheckout.depositAmount && selectedTabForCheckout.depositAmount > 0 ? (
+                        <div className="flex items-center justify-between text-xs text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-500/10 px-2.5 py-1.5 rounded-xl border border-emerald-500/20">
+                          <span>بیعانه پرداختی در رزرو (کسر از فاکتور):</span>
+                          <span className="tabular-nums font-mono">
+                            - {formatToman(selectedTabForCheckout.depositAmount)} تومان
+                          </span>
+                        </div>
+                      ) : null}
+
+                      <div className="pt-2 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                        <span className="text-xs font-bold text-[#2596BE]">
+                          {checkoutSettleScope === 'buffet'
+                            ? 'مبلغ بوفه قابل تسویه (میز باز می‌ماند):'
+                            : checkoutSettleScope === 'custom_amount'
+                            ? 'مبلغ خالص علی‌الحساب:'
+                            : 'مبلغ خالص قابل دریافت در تسویه:'}
+                        </span>
+                        <div className="text-lg font-black text-slate-900 dark:text-white tabular-nums">
+                          {formatToman(currentPayableAmount)}
+                          <span className="text-xs font-normal text-slate-400 mr-1">تومان</span>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
 
               {/* SmartLaunch Gaming Time Info if Active/Stopped on Tab */}
               {(selectedTabForCheckout.isTimerActive || (selectedTabForCheckout.timerCalculatedCost && selectedTabForCheckout.timerCalculatedCost > 0)) && (
@@ -2114,6 +2333,13 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
                   isManualNew={checkoutCustomerSource === 'new'}
                   manualCustomerName={checkoutCustomerName}
                   manualCustomerPhone={checkoutCustomerPhone}
+                  manualSmartLaunchId={checkoutSmartLaunchId}
+                  onManualSmartLaunchIdChange={(id) => setCheckoutSmartLaunchId(id)}
+                  onQuickCreateWithId={(term) => {
+                    setCheckoutCustomerSource('new');
+                    setCheckoutCustomerName(term);
+                    setCheckoutSmartLaunchId(term);
+                  }}
                   onManualToggle={(isManual) => {
                     setCheckoutCustomerSource(isManual ? 'new' : 'existing');
                     if (isManual) {
@@ -2122,6 +2348,9 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
                       setCheckoutPersonId(persons[0].id);
                       setCheckoutCustomerName(persons[0].name);
                       setCheckoutCustomerPhone(persons[0].phone || '');
+                      if (persons[0].smartLaunchId) {
+                        setCheckoutSmartLaunchId(persons[0].smartLaunchId);
+                      }
                     }
                   }}
                   onManualNameChange={(name) => setCheckoutCustomerName(name)}
@@ -2290,11 +2519,13 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
 
               {/* Debt Notice for Credit */}
               {checkoutPaymentMethod === 'credit' && (
-                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-700 dark:text-amber-300 flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>
-                    مبلغ خالص این میز به صورت نسیه در پرونده مشتری ثبت خواهد شد.
-                  </span>
+                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 flex items-center justify-between text-xs text-amber-700 dark:text-amber-400 font-medium">
+                  <span>مبلغ این تسویه به عنوان بدهی نسیه در حساب مشتری ثبت خواهد شد (وارد دخل نقدی نمی‌شود).</span>
+                  {checkoutSettleScope === 'buffet' && (
+                    <span className="font-bold text-emerald-600 dark:text-emerald-400 text-[11px]">
+                      (اقلام بوفه کسر و تایمر میز باز می‌ماند)
+                    </span>
+                  )}
                 </div>
               )}
 
@@ -2470,6 +2701,7 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
                   isManualNew={resvCustomerSource === 'new'}
                   manualCustomerName={resvCustomerName}
                   manualCustomerPhone={resvCustomerPhone}
+                  manualSmartLaunchId={resvSmartLaunchId}
                   onManualToggle={(isManual) => {
                     setResvCustomerSource(isManual ? 'new' : 'existing');
                     if (isManual) {
@@ -2482,6 +2714,7 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
                   }}
                   onManualNameChange={(name) => setResvCustomerName(name)}
                   onManualPhoneChange={(phone) => setResvCustomerPhone(phone)}
+                  onManualSmartLaunchIdChange={setResvSmartLaunchId}
                   label="مشتری *"
                   placeholder="جستجوی نام یا شماره تماس..."
                   emptyLabel="بدون انتخاب مشتری"

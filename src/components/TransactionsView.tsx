@@ -109,7 +109,12 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
     let inc = 0;
     let exp = 0;
     filteredTransactions.forEach((tx) => {
-      if (tx.type === 'income' || tx.type === 'receivable_collection') inc += tx.amount;
+      const isCreditTx =
+        tx.paymentMethod === 'credit' ||
+        tx.isCredit ||
+        (!tx.toAccountId && (tx.description?.includes('نسیه') || tx.description?.includes('[نسیه]')));
+
+      if ((tx.type === 'income' && !isCreditTx) || tx.type === 'receivable_collection') inc += tx.amount;
       if (tx.type === 'expense' || tx.type === 'debt_settlement') exp += tx.amount;
     });
     return { income: inc, expense: exp, net: inc - exp };
@@ -330,10 +335,18 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                     </td>
                     <td className="py-3 px-4 whitespace-nowrap">
                       {tx.type === 'income' && (
-                        <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-bold">
-                          <ArrowDownLeft className="w-3.5 h-3.5" />
-                          درآمد
-                        </span>
+                        (tx.paymentMethod === 'credit' ||
+                        tx.isCredit ||
+                        (!tx.toAccountId && (tx.description?.includes('نسیه') || tx.description?.includes('[نسیه]')))) ? (
+                          <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 font-bold bg-amber-500/10 px-2 py-0.5 rounded-lg text-xs">
+                            نسیه (طلب)
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-bold">
+                            <ArrowDownLeft className="w-3.5 h-3.5" />
+                            درآمد
+                          </span>
+                        )
                       )}
                       {tx.type === 'expense' && (
                         <span className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400 font-bold">
