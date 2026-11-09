@@ -1,14 +1,17 @@
 node_modules/
 build/
 dist/
+.vite/
 coverage/
 .DS_Store
 *.log
+bun.lock*
 .env*
 !.env.example
 
 # Database & Persistent Data (Never push customer data to GitHub)
 data/
+backups/
 *.tmp
 *.bak
 *.corrupted.*

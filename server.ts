@@ -3,7 +3,12 @@ import express, { Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { fileURLToPath } from 'url';
+
+const execAsync = promisify(exec);
+let isSystemUpdating = false;
 import {
   Account,
   AuditLog,
@@ -4466,6 +4471,277 @@ app.post('/api/reset-data', (req: Request, res: Response) => {
   const fresh = getInitialData();
   saveDatabase(fresh);
   res.json({ success: true, message: 'داده‌ها به حالت اولیه دمو بازنشانی شدند' });
+});
+
+// ==========================================
+// System Update & PM2 Management API Routes
+// ==========================================
+
+app.get('/api/system/update-status', async (_req: Request, res: Response) => {
+  const isGitRepo = fs.existsSync(path.join(__dirname, '.git'));
+  let currentCommit = 'unknown';
+  let currentBranch = 'main';
+  let lastCommitMessage = '';
+  let lastCommitDate = '';
+  let remoteUrl = '';
+
+  if (isGitRepo) {
+    try {
+      const { stdout: commitOut } = await execAsync('git rev-parse --short HEAD', { cwd: __dirname, timeout: 5000 });
+      currentCommit = commitOut.trim();
+    } catch {
+      // ignore
+    }
+
+    try {
+      const { stdout: branchOut } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd: __dirname, timeout: 5000 });
+      currentBranch = branchOut.trim();
+    } catch {
+      // ignore
+    }
+
+    try {
+      const { stdout: msgOut } = await execAsync('git log -1 --pretty=%B', { cwd: __dirname, timeout: 5000 });
+      lastCommitMessage = msgOut.trim().split('\n')[0];
+    } catch {
+      // ignore
+    }
+
+    try {
+      const { stdout: dateOut } = await execAsync('git log -1 --format=%cd --date=format:"%Y/%m/%d %H:%M"', { cwd: __dirname, timeout: 5000 });
+      lastCommitDate = dateOut.trim();
+    } catch {
+      // ignore
+    }
+
+    try {
+      const { stdout: remoteOut } = await execAsync('git remote get-url origin', { cwd: __dirname, timeout: 5000 });
+      remoteUrl = remoteOut.trim();
+    } catch {
+      // ignore
+    }
+  }
+
+  // Check last backup file
+  let lastBackupFile: string | undefined;
+  const backupDir = path.join(__dirname, 'backups');
+  if (fs.existsSync(backupDir)) {
+    try {
+      const files = fs.readdirSync(backupDir).filter((f) => f.endsWith('.bak')).sort().reverse();
+      if (files.length > 0) lastBackupFile = files[0];
+    } catch {
+      // ignore
+    }
+  }
+
+  // Read package version
+  let packageVersion = '1.1.0';
+  try {
+    const pkgPath = path.join(__dirname, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+      if (pkg.version) packageVersion = pkg.version;
+    }
+  } catch {
+    // ignore
+  }
+
+  const pm2Managed = process.env.pm_id !== undefined || process.env.PM2_HOME !== undefined;
+
+  res.json({
+    isGitRepo,
+    currentCommit,
+    currentBranch,
+    lastCommitMessage,
+    lastCommitDate,
+    remoteUrl,
+    packageVersion,
+    pm2Managed,
+    pm2Id: process.env.pm_id,
+    isUpdating: isSystemUpdating,
+    lastBackupFile,
+    nodeVersion: process.version,
+    platform: process.platform,
+    uptimeSeconds: Math.round(process.uptime()),
+  });
+});
+
+app.post('/api/system/check-updates', async (_req: Request, res: Response) => {
+  const isGitRepo = fs.existsSync(path.join(__dirname, '.git'));
+  if (!isGitRepo) {
+    res.status(400).json({ success: false, error: 'پروژه جاری به عنوان مخزن گیت شناسایی نشد.' });
+    return;
+  }
+
+  try {
+    // 1. Fetch remote changes
+    await execAsync('git fetch origin main', { cwd: __dirname, timeout: 20000 });
+
+    // 2. Compare local HEAD with remote origin/main
+    const { stdout: localHead } = await execAsync('git rev-parse HEAD', { cwd: __dirname, timeout: 5000 });
+    const { stdout: remoteHead } = await execAsync('git rev-parse origin/main', { cwd: __dirname, timeout: 5000 });
+
+    const isDifferent = localHead.trim() !== remoteHead.trim();
+
+    if (!isDifferent) {
+      res.json({
+        success: true,
+        hasUpdate: false,
+        behindCount: 0,
+        commits: [],
+        message: 'برنامه شما کاملاً بروز است و تغییری در گیت‌هاب ثبت نشده است.',
+      });
+      return;
+    }
+
+    // 3. Count commits behind and get titles
+    let behindCount = 1;
+    try {
+      const { stdout: countOut } = await execAsync('git rev-list --count HEAD..origin/main', { cwd: __dirname, timeout: 5000 });
+      behindCount = parseInt(countOut.trim(), 10) || 1;
+    } catch {
+      // ignore
+    }
+
+    let commits: string[] = [];
+    try {
+      const { stdout: logsOut } = await execAsync('git log HEAD..origin/main --pretty=format:"%h - %s" -n 10', { cwd: __dirname, timeout: 5000 });
+      commits = logsOut.trim().split('\n').filter(Boolean);
+    } catch {
+      // ignore
+    }
+
+    res.json({
+      success: true,
+      hasUpdate: true,
+      behindCount,
+      commits,
+      message: `${behindCount} بروزرسانی جدید در گیت‌هاب موجود است.`,
+    });
+  } catch (err: any) {
+    console.error('[Check Updates Error]:', err);
+    res.status(500).json({
+      success: false,
+      error: 'خطا در اتصال به مخزن گیت‌هاب! لطفاً اتصال اینترنت سرور یا دسترسی به گیت‌هاب را بررسی کنید.',
+      details: err?.message || String(err),
+    });
+  }
+});
+
+app.post('/api/system/trigger-update', async (_req: Request, res: Response) => {
+  if (isSystemUpdating) {
+    res.status(409).json({ error: 'یک فرآیند بروزرسانی در حال اجرا است. لطفاً شکیبا باشید.' });
+    return;
+  }
+
+  const isGitRepo = fs.existsSync(path.join(__dirname, '.git'));
+  if (!isGitRepo) {
+    res.status(400).json({ error: 'پوشه مخزن گیت (.git) یافت نشد.' });
+    return;
+  }
+
+  isSystemUpdating = true;
+  const logs: string[] = [];
+
+  try {
+    logs.push(`[${new Date().toLocaleTimeString('fa-IR')}] شروع فرآیند خودکار بروزرسانی...`);
+
+    // Step 1: Pre-update Safety Backup of Database
+    const backupDir = path.join(__dirname, 'backups');
+    if (!fs.existsSync(backupDir)) {
+      fs.mkdirSync(backupDir, { recursive: true });
+    }
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupFileName = `nexus_db_before_update_${timestamp}.bak`;
+    const backupFilePath = path.join(backupDir, backupFileName);
+
+    if (fs.existsSync(DB_FILE)) {
+      fs.copyFileSync(DB_FILE, backupFilePath);
+      logs.push(`[پشتیبان‌گیری] دیتابیس فعلی با موفقیت در backups/${backupFileName} ذخیره شد.`);
+    }
+
+    // Step 2: Git Pull
+    logs.push('[گیت‌هاب] در حال دریافت کدهای جدید از مخزن گیت‌هاب...');
+    try {
+      const { stdout: pullOut } = await execAsync('git pull origin main', { cwd: __dirname, timeout: 45000 });
+      logs.push(`[گیت‌هاب]: ${pullOut.trim()}`);
+    } catch (pullErr: any) {
+      logs.push(`[هشدار گیت]: ${pullErr?.message || String(pullErr)}`);
+      await execAsync('git fetch origin main && git reset --hard origin/main', { cwd: __dirname, timeout: 30000 });
+      logs.push('[گیت‌هاب]: همگام‌سازی کامل با شاخه اصلی گیت‌هاب انجام شد.');
+    }
+
+    // Step 3: npm install
+    logs.push('[پکیج‌ها] بررسی و نصب وابستگی‌های جدید (npm install)...');
+    try {
+      const { stdout: npmOut } = await execAsync('npm install --legacy-peer-deps --no-audit', { cwd: __dirname, timeout: 120000 });
+      if (npmOut) logs.push(`[npm]: ${npmOut.slice(0, 300)}...`);
+    } catch (npmErr: any) {
+      logs.push(`[هشدار npm]: ${npmErr?.message || String(npmErr)}`);
+    }
+
+    // Step 4: npm run build
+    logs.push('[کامپایل] بیلد نهایی پروژه با Vite...');
+    await execAsync('npm run build', { cwd: __dirname, timeout: 60000 });
+    logs.push('[کامپایل]: بیلد با موفقیت ایجاد شد.');
+
+    // Step 5: Audit Log in DB
+    const db = loadDatabase();
+    logAudit(db, 'settings', 'sys', 'update', 'بروزرسانی موفق سیستم از طریق پنل تنظیمات');
+    saveDatabase(db);
+
+    logs.push('====================================================');
+    logs.push('آپدیت با موفقیت کامل نصب شد و دیتابیس کاملاً حفظ گردید!');
+    logs.push('سرور تا ۲ ثانیه دیگر به صورت خودکار مجدداً راه‌اندازی (Restart) می‌شود...');
+
+    // Respond immediately before restarting server
+    res.json({
+      success: true,
+      message: 'بروزرسانی با موفقیت انجام شد! دیتابیس در امنیت کامل حفظ شد و سرور در حال راه‌اندازی مجدد است.',
+      logs,
+      restarting: true,
+    });
+
+    // Step 6: Trigger Server Restart after delay
+    setTimeout(() => {
+      console.log('[System Update] Restarting server process...');
+      exec('pm2 reload nexus-server || pm2 restart nexus-server', (pm2Err) => {
+        if (pm2Err) {
+          console.log('[System Update] PM2 CLI not found or standalone, exiting to restart:', pm2Err.message);
+          process.exit(0);
+        } else {
+          console.log('[System Update] PM2 successfully reloaded.');
+        }
+      });
+    }, 2000);
+  } catch (err: any) {
+    console.error('[Trigger Update Error]:', err);
+    logs.push(`[خطای غیرمنتظره]: ${err?.message || String(err)}`);
+    res.status(500).json({
+      success: false,
+      error: 'خطا در فرآیند بروزرسانی سیستم',
+      details: err?.message || String(err),
+      logs,
+    });
+  } finally {
+    isSystemUpdating = false;
+  }
+});
+
+app.post('/api/system/restart', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    message: 'دستور راه‌اندازی مجدد سرور صادر شد. صفحه تا ۳ ثانیه دیگر خودکار بازیابی می‌شود.',
+  });
+
+  setTimeout(() => {
+    console.log('[System Restart] Triggering process restart...');
+    exec('pm2 reload nexus-server || pm2 restart nexus-server', (err) => {
+      if (err) {
+        process.exit(0);
+      }
+    });
+  }, 1500);
 });
 
 // Serve frontend in development via Vite middleware or production static

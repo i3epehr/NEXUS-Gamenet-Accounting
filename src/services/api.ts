@@ -676,4 +676,52 @@ export const api = {
       body: JSON.stringify(data),
     });
   },
+
+  // System Update & PM2 Management API
+  async getSystemUpdateStatus(): Promise<{
+    isGitRepo: boolean;
+    currentCommit: string;
+    currentBranch: string;
+    lastCommitMessage: string;
+    lastCommitDate: string;
+    remoteUrl: string;
+    packageVersion: string;
+    pm2Managed: boolean;
+    pm2Id?: string;
+    isUpdating: boolean;
+    lastBackupFile?: string;
+    nodeVersion: string;
+    platform: string;
+    uptimeSeconds: number;
+  }> {
+    return fetchJson('/api/system/update-status');
+  },
+
+  async checkSystemUpdates(): Promise<{
+    success: boolean;
+    hasUpdate: boolean;
+    behindCount?: number;
+    commits?: string[];
+    message: string;
+    error?: string;
+  }> {
+    return fetchJson('/api/system/check-updates', { method: 'POST' });
+  },
+
+  async triggerSystemUpdate(): Promise<{
+    success: boolean;
+    message: string;
+    logs: string[];
+    restarting?: boolean;
+    error?: string;
+  }> {
+    return fetchJson('/api/system/trigger-update', { method: 'POST' });
+  },
+
+  async restartSystemServer(): Promise<{
+    success: boolean;
+    message: string;
+  }> {
+    return fetchJson('/api/system/restart', { method: 'POST' });
+  },
 };

@@ -1,0 +1,32 @@
+{
+  "name": "NEXUS GameNet | سامانه حسابداری نکسوس",
+  "short_name": "NEXUS",
+  "description": "سامانه جامع مدیریت مالی، بوفه و میزهای گیم‌نت نکسوس",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0B1325",
+  "theme_color": "#0B1325",
+  "dir": "rtl",
+  "lang": "fa",
+  "icons": [
+    {
+      "src": "/icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
