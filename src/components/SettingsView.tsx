@@ -120,7 +120,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onResetData,
   onRefresh,
 }) => {
-  const [activeTab, setActiveTab] = useState<'profile' | 'categories' | 'users' | 'audit' | 'backup' | 'update'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'categories' | 'users' | 'audit' | 'backup'>('profile');
 
   // System Update & PM2 Management State
   const [updateStatus, setUpdateStatus] = useState<Awaited<ReturnType<typeof api.getSystemUpdateStatus>> | null>(null);
@@ -148,7 +148,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   useEffect(() => {
-    if (activeTab === 'update') {
+    if (activeTab === 'backup') {
       fetchUpdateStatus();
     }
   }, [activeTab]);
@@ -685,8 +685,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           { id: 'categories', label: 'دسته‌بندی‌ها و بوفه', icon: <Tag className="w-4 h-4" /> },
           { id: 'users', label: 'مدیریت کاربران و دسترسی', icon: <Users className="w-4 h-4" /> },
           { id: 'audit', label: 'گزارش وقایع (Audit)', icon: <ShieldAlert className="w-4 h-4" /> },
-          { id: 'backup', label: 'پشتیبان و صفر کردن داده‌ها', icon: <Download className="w-4 h-4" /> },
-          { id: 'update', label: 'بروزرسانی و سرور (GitHub & PM2)', icon: <GitBranch className="w-4 h-4" /> },
+          { id: 'backup', label: 'پشتیبان، بروزرسانی و داده‌ها', icon: <Download className="w-4 h-4" /> },
         ].map((tab) => (
           <button
             key={tab.id}
@@ -1735,292 +1734,88 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       )}
 
-      {/* Tab 5: Backup & Restore & Zero Data Handover */}
+      {/* Tab: Backup, Online Update & Data Management */}
       {activeTab === 'backup' && (
-        <div className="max-w-xl space-y-5">
-          {/* 1. Backup Download */}
-          <div className="bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xs space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-[#2596BE]/10 text-[#2596BE] flex items-center justify-center">
-                <Download className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="font-bold text-sm text-slate-900 dark:text-white">
-                  دریافت فایل پشتیبان کامل (JSON)
-                </h3>
-                <p className="text-xs text-slate-500">
-                  دانلود نسخه کامل پایگاه داده شامل تراکنش‌ها، کالاها، حساب‌ها و اشخاص
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={handleDownloadBackup}
-              className="w-full py-2.5 px-4 bg-[#2596BE] hover:bg-[#1E7E9E] text-white text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2"
-            >
-              <Download className="w-4 h-4" />
-              <span>دانلود فایل پشتیبان (Backup)</span>
-            </button>
-          </div>
-
-          {/* 2. Restore Backup */}
-          <div className="bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xs space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400 flex items-center justify-center">
-                <Upload className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="font-bold text-sm text-slate-900 dark:text-white">
-                  بازیابی اطلاعات از فایل پشتیبان
-                </h3>
-                <p className="text-xs text-slate-500">
-                  بارگذاری فایل JSON جهت بازگردانی اطلاعات قبلی
-                </p>
-              </div>
-            </div>
-            <input
-              type="file"
-              ref={fileInputRef}
-              accept=".json"
-              onChange={handleFileUpload}
-              className="hidden"
-            />
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={restoreLoading}
-              className="w-full py-2.5 px-4 bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 text-white text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2 border border-slate-700"
-            >
-              <Upload className="w-4 h-4" />
-              <span>انتخاب فایل JSON و بازیابی</span>
-            </button>
-            {restoreMessage && (
-              <p className="text-xs text-center font-semibold text-[#2596BE]">
-                {restoreMessage}
-              </p>
-            )}
-          </div>
-
-          {/* 3. Clean Zero (صفر کردن انتخابی داده‌ها) */}
-          <div className="bg-rose-500/10 dark:bg-rose-950/30 border-2 border-rose-500/40 dark:border-rose-800 rounded-2xl p-5 shadow-sm space-y-3">
-            <div className="flex items-center gap-2 text-rose-700 dark:text-rose-400 font-extrabold text-sm">
-              <RotateCcw className="w-5 h-5 text-rose-600" />
-              <span>صفر کردن یا بازنشانی انتخابی داده‌ها</span>
-            </div>
-            <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
-              با انتخاب این گزینه، پنجره انتخاب بخش‌ها باز می‌شود تا بتوانید مشخص کنید دقیقا کدام اطلاعات (تراکنش‌ها، سفارشات میزها، موجودی صندوق‌ها، اشخاص و بدهی‌ها، انبار و ...) صفر یا پاک شوند.
-            </p>
-            <button
-              type="button"
-              onClick={() => setIsGranularResetOpen(true)}
-              className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-black rounded-xl transition-all cursor-pointer shadow-md shadow-rose-600/20 flex items-center gap-2"
-            >
-              <RotateCcw className="w-4 h-4" />
-              <span>صفر کردن انتخابی داده‌ها (با انتخاب بخش‌ها)</span>
-            </button>
-          </div>
-
-          {/* 4. Reset To Seed Data */}
-          <div className="bg-amber-500/10 dark:bg-amber-950/20 border border-amber-300 dark:border-amber-900/60 rounded-2xl p-5 shadow-xs space-y-3">
-            <div className="flex items-center gap-2 text-amber-800 dark:text-amber-400 font-bold text-xs">
-              <AlertCircle className="w-4 h-4" />
-              <span>بازنشانی به داده‌های اولیه</span>
-            </div>
-            <p className="text-xs text-slate-600 dark:text-slate-400">
-              بازگردانی تراکنش‌ها و میزهای پیش‌فرض پایه برای راه‌اندازی اولیه سامانه.
-            </p>
-            <button
-              type="button"
-              onClick={() => setResetModalType('seed')}
-              className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl transition-all cursor-pointer"
-            >
-              بازنشانی داده‌های پایه
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Tab 6: System Update & PM2 Server Management */}
-      {activeTab === 'update' && (
-        <div className="space-y-6 max-w-4xl">
-          {/* Safe Data Guarantee Card */}
-          <div className="bg-emerald-500/10 border-2 border-emerald-500/30 rounded-2xl p-5 shadow-sm space-y-2">
-            <div className="flex items-center gap-2.5 text-emerald-600 dark:text-emerald-400 font-black text-sm">
-              <ShieldCheck className="w-5 h-5" />
-              <span>تضمین ۱۰۰٪ حفظ اطلاعات و پایگاه‌داده مشتری هنگام آپدیت</span>
-            </div>
-            <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
-              تمامی اطلاعات حسابداری، فاکتورهای باز، تراکنش‌ها، اشخاص، موجودی انبار و پرسنل در فایل <code className="px-1.5 py-0.5 rounded bg-emerald-500/15 font-mono text-[11px] font-bold">data/nexus_db.json</code> نگهداری می‌شوند. این فایل در گیت نادیده گرفته شده (<span className="font-mono">.gitignore</span>) و همچنین در ابتدای هر عملیات آپدیت، یک نسخه پشتیبان کامل با پسوند <code className="px-1.5 py-0.5 rounded bg-emerald-500/15 font-mono text-[11px] font-bold">.bak</code> در پوشه <code className="px-1.5 py-0.5 rounded bg-emerald-500/15 font-mono text-[11px] font-bold">backups/</code> ایجاد می‌گردد تا هیچ داده‌ای هرگز از بین نرود.
-            </p>
-          </div>
-
-          {/* System & PM2 Info Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* Git & Version Status */}
-            <div className="bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs space-y-3">
-              <div className="flex items-center justify-between text-xs font-bold text-slate-500 dark:text-slate-400">
-                <span className="flex items-center gap-1.5">
-                  <GitBranch className="w-4 h-4 text-[#2596BE]" />
-                  وضعیت مخزن گیت (Git)
-                </span>
-                <span className="px-2 py-0.5 rounded-full text-[10px] bg-sky-500/10 text-sky-600 dark:text-sky-400 font-mono">
-                  {updateStatus?.currentBranch || 'main'}
-                </span>
-              </div>
-              <div className="space-y-1">
-                <div className="text-xs text-slate-400 font-medium">کامیت فعلی:</div>
-                <div className="text-xs font-mono font-bold text-slate-800 dark:text-slate-200 truncate" title={updateStatus?.currentCommit}>
-                  {updateStatus?.currentCommit || (statusLoading ? 'در حال بارگذاری...' : 'ـ')}
+        <div className="max-w-3xl space-y-5">
+          {/* Section 1: Software Online Updates (GitHub) */}
+          <div className="bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800/80">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-[#2596BE]/10 text-[#2596BE] flex items-center justify-center shrink-0">
+                  <RefreshCw className={`w-5 h-5 ${checkingUpdates ? 'animate-spin' : ''}`} />
                 </div>
-                {updateStatus?.lastCommitMessage && (
-                  <div className="text-[11px] text-slate-500 line-clamp-2 mt-1">
-                    {updateStatus.lastCommitMessage}
-                  </div>
-                )}
-              </div>
-              <div className="pt-2 border-t border-slate-100 dark:border-slate-800/80 text-[11px] text-slate-400">
-                نسخه برنامه: <span className="font-mono font-bold text-slate-700 dark:text-slate-300">v{updateStatus?.packageVersion || '1.0.0'}</span>
-              </div>
-            </div>
-
-            {/* PM2 & Process Status */}
-            <div className="bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs space-y-3">
-              <div className="flex items-center justify-between text-xs font-bold text-slate-500 dark:text-slate-400">
-                <span className="flex items-center gap-1.5">
-                  <Server className="w-4 h-4 text-emerald-500" />
-                  مدیریت پردازش سرور (PM2)
-                </span>
-                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                  updateStatus?.pm2Managed
-                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                    : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
-                }`}>
-                  {updateStatus?.pm2Managed ? `سرویس فعال (ID: ${updateStatus.pm2Id ?? 0})` : 'حالت دستی (Node)'}
-                </span>
-              </div>
-              <div className="space-y-1.5 text-xs text-slate-600 dark:text-slate-400">
-                <div className="flex justify-between items-center">
-                  <span>سیستم‌عامل:</span>
-                  <span className="font-mono font-bold text-slate-800 dark:text-slate-200">{updateStatus?.platform || 'ـ'}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span>ورژن Node.js:</span>
-                  <span className="font-mono font-bold text-slate-800 dark:text-slate-200">{updateStatus?.nodeVersion || 'ـ'}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span>مدت کارکرد (Uptime):</span>
-                  <span className="font-mono font-bold text-slate-800 dark:text-slate-200">
-                    {updateStatus?.uptimeSeconds !== undefined ? `${Math.floor(updateStatus.uptimeSeconds / 60)} دقیقه` : 'ـ'}
-                  </span>
+                <div>
+                  <h3 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
+                    <span>بروزرسانی آنلاین نرم‌افزار</span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                      v{updateStatus?.packageVersion || '1.1.0'}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    بررسی و دریافت خودکار آخرین نسخه و بهبودهای برنامه از سرور مرکزی
+                  </p>
                 </div>
               </div>
-            </div>
 
-            {/* Database Backup Status */}
-            <div className="bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs space-y-3">
-              <div className="flex items-center justify-between text-xs font-bold text-slate-500 dark:text-slate-400">
-                <span className="flex items-center gap-1.5">
-                  <Shield className="w-4 h-4 text-purple-500" />
-                  پشتیبان خودکار دیتابیس
-                </span>
-                <span className="px-2 py-0.5 rounded-full text-[10px] bg-purple-500/10 text-purple-600 dark:text-purple-400 font-bold">
-                  پوشه backups/
-                </span>
-              </div>
-              <div className="space-y-1">
-                <div className="text-xs text-slate-400">آخرین فایل پشتیبان پیش از آپدیت:</div>
-                <div className="text-[11px] font-mono text-slate-700 dark:text-slate-300 break-all">
-                  {updateStatus?.lastBackupFile || 'اولین آپدیت فایل بک‌آپ خودکار می‌سازد'}
-                </div>
-              </div>
-              <div className="pt-2 border-t border-slate-100 dark:border-slate-800/80 text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
-                ✓ محافظت کامل در برابر تغییرات کد
-              </div>
-            </div>
-          </div>
-
-          {/* Update Controls Card */}
-          <div className="bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xs space-y-5">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <h3 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
-                  <ArrowDownCircle className="w-4 h-4 text-[#2596BE]" />
-                  عملیات بروزرسانی خودکار و راه‌اندازی سرور
-                </h3>
-                <p className="text-xs text-slate-500 mt-1">
-                  با کلیک روی بررسی، آخرین تغییرات مخزن اصلی در گیت‌هاب بررسی می‌شود و با زدن دکمه آپدیت، فرآیند Pull + Build + PM2 Restart به شکل خودکار اجرا می‌گردد.
-                </p>
-              </div>
-              <div className="flex items-center gap-2 flex-wrap">
+              {/* Action Buttons */}
+              <div className="flex items-center gap-2 self-end sm:self-auto">
                 <button
                   type="button"
                   disabled={statusLoading || checkingUpdates || isUpdatingApp}
                   onClick={handleCheckUpdates}
-                  className="px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-bold transition-all cursor-pointer flex items-center gap-2 disabled:opacity-50"
+                  className="px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
                 >
-                  {checkingUpdates ? <Loader2 className="w-4 h-4 animate-spin text-[#2596BE]" /> : <RefreshCw className="w-4 h-4" />}
-                  <span>بررسی آپدیت (Check)</span>
+                  {checkingUpdates ? <Loader2 className="w-3.5 h-3.5 animate-spin text-[#2596BE]" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                  <span>بررسی نسخه جدید</span>
                 </button>
 
                 <button
                   type="button"
                   disabled={statusLoading || checkingUpdates || isUpdatingApp}
                   onClick={() => setShowUpdateConfirm(true)}
-                  className="px-4 py-2 rounded-xl bg-[#2596BE] hover:bg-[#1f7ca0] text-white text-xs font-black shadow-md shadow-[#2596BE]/25 transition-all cursor-pointer flex items-center gap-2 disabled:opacity-50"
+                  className="px-4 py-2 rounded-xl bg-[#2596BE] hover:bg-[#1E7E9E] text-white text-xs font-black shadow-xs transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
                 >
-                  {isUpdatingApp ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                  <span>نصب و اجرای آپدیت (Update)</span>
-                </button>
-
-                <button
-                  type="button"
-                  disabled={isRestartingServer || isUpdatingApp}
-                  onClick={handleRestartServer}
-                  title="راه‌اندازی مجدد سرویس بک‌اند با PM2 بدون آپدیت"
-                  className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-400 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
-                >
-                  {isRestartingServer ? <Loader2 className="w-4 h-4 animate-spin text-amber-500" /> : <RotateCcw className="w-4 h-4" />}
-                  <span>ری‌استارت سرور</span>
+                  {isUpdatingApp ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                  <span>نصب بروزرسانی</span>
                 </button>
               </div>
             </div>
 
-            {/* Update Check Results Notification */}
+            {/* Check Results Notification */}
             {checkResult && (
-              <div className={`p-4 rounded-xl text-xs space-y-2 border ${
+              <div className={`p-3.5 rounded-xl text-xs space-y-2 border ${
                 checkResult.hasUpdate
                   ? 'bg-amber-500/10 border-amber-500/30 text-amber-900 dark:text-amber-200'
                   : checkResult.success
                   ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-900 dark:text-emerald-200'
                   : 'bg-rose-500/10 border-rose-500/30 text-rose-900 dark:text-rose-200'
               }`}>
-                <div className="flex items-center gap-2 font-black">
+                <div className="flex items-center gap-2 font-bold">
                   {checkResult.hasUpdate ? (
-                    <AlertCircle className="w-4 h-4 text-amber-500" />
+                    <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
                   ) : checkResult.success ? (
-                    <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
                   ) : (
-                    <AlertCircle className="w-4 h-4 text-rose-500" />
+                    <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
                   )}
                   <span>{checkResult.message}</span>
                   {checkResult.behindCount && checkResult.behindCount > 0 && (
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-700 dark:text-amber-300">
-                      {checkResult.behindCount} کامیت جدید در گیت‌هاب موجود است
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-700 dark:text-amber-300 mr-auto">
+                      {checkResult.behindCount} تغییر جدید
                     </span>
                   )}
                 </div>
                 {checkResult.commits && checkResult.commits.length > 0 && (
-                  <div className="mt-2 space-y-1">
-                    <span className="font-bold block text-slate-600 dark:text-slate-400">تغییرات جدید ارسالی:</span>
-                    <ul className="list-disc list-inside space-y-0.5 font-mono text-[11px] text-slate-700 dark:text-slate-300">
-                      {checkResult.commits.map((c, i) => (
-                        <li key={i}>{c}</li>
-                      ))}
-                    </ul>
-                  </div>
+                  <ul className="list-disc list-inside space-y-0.5 font-mono text-[11px] text-slate-700 dark:text-slate-300 pt-1">
+                    {checkResult.commits.map((c, i) => (
+                      <li key={i}>{c}</li>
+                    ))}
+                  </ul>
                 )}
               </div>
             )}
 
-            {/* Restart Status Alert */}
+            {/* Restarting Status Alert */}
             {restartMessage && (
               <div className="p-3.5 rounded-xl bg-sky-500/10 border border-sky-500/30 text-sky-700 dark:text-sky-300 text-xs font-semibold flex items-center gap-2">
                 <Loader2 className="w-4 h-4 animate-spin text-sky-500" />
@@ -2028,37 +1823,121 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             )}
 
-            {/* Terminal Output Log Window */}
+            {/* Terminal Live Output (shown only when updating or logs exist) */}
             {(updateLogs.length > 0 || isUpdatingApp) && (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs text-slate-500">
-                  <span className="flex items-center gap-1.5 font-bold">
-                    <Terminal className="w-4 h-4 text-[#2596BE]" />
-                    لاگ زنده ترمینال اجرای آپدیت و کامپایل:
+              <div className="space-y-1.5 pt-1">
+                <div className="flex items-center justify-between text-xs text-slate-500 font-semibold">
+                  <span className="flex items-center gap-1.5">
+                    <Terminal className="w-3.5 h-3.5 text-[#2596BE]" />
+                    گزارش نصب بروزرسانی:
                   </span>
                   {isUpdatingApp && (
-                    <span className="text-amber-500 font-bold flex items-center gap-1">
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      در حال اجرای دستورات سرور...
+                    <span className="text-amber-500 text-[11px] font-bold flex items-center gap-1">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      در حال اعمال تغییرات...
                     </span>
                   )}
                 </div>
-                <div className="bg-slate-950 font-mono text-xs rounded-2xl border border-slate-800 p-4 text-emerald-400 max-h-72 overflow-y-auto space-y-1 shadow-inner dir-ltr text-left">
+                <div className="bg-slate-950 font-mono text-xs rounded-xl border border-slate-800 p-3.5 text-emerald-400 max-h-56 overflow-y-auto space-y-1 shadow-inner dir-ltr text-left">
                   {updateLogs.map((log, index) => (
                     <div key={index} className="leading-relaxed">
-                      <span className="text-slate-500 mr-2 select-none">$</span>
+                      <span className="text-slate-600 mr-2 select-none">$</span>
                       <span>{log}</span>
                     </div>
                   ))}
-                  {isUpdatingApp && (
-                    <div className="text-amber-400 animate-pulse">
-                      <span className="text-slate-500 mr-2 select-none">$</span>
-                      در حال پردازش گام بعدی...
-                    </div>
-                  )}
                 </div>
               </div>
             )}
+
+            <div className="text-[11px] text-slate-400 dark:text-slate-500 flex items-center gap-1.5 pt-1">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+              <span>کلیه اطلاعات مالی و فاکتورها پیش از بروزرسانی به صورت خودکار پشتیبان‌گیری می‌شوند.</span>
+            </div>
+          </div>
+
+          {/* Section 2: Backup & Restore */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Backup Download Card */}
+            <div className="bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs space-y-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-[#2596BE]/10 text-[#2596BE] flex items-center justify-center">
+                  <Download className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-xs text-slate-900 dark:text-white">
+                    دانلود فایل پشتیبان (Backup)
+                  </h4>
+                  <p className="text-[11px] text-slate-500">
+                    ذخیره کامل اطلاعات و فاکتورها
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={handleDownloadBackup}
+                className="w-full py-2 px-3 bg-[#2596BE] hover:bg-[#1E7E9E] text-white text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-xs"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>دریافت نسخه پشتیبان</span>
+              </button>
+            </div>
+
+            {/* Backup Restore Card */}
+            <div className="bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs space-y-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400 flex items-center justify-center">
+                  <Upload className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-xs text-slate-900 dark:text-white">
+                    بازیابی از فایل پشتیبان
+                  </h4>
+                  <p className="text-[11px] text-slate-500">
+                    بازگردانی اطلاعات از فایل قبلی
+                  </p>
+                </div>
+              </div>
+              <input
+                type="file"
+                ref={fileInputRef}
+                accept=".json"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={restoreLoading}
+                className="w-full py-2 px-3 bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 text-white text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 border border-slate-700"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>انتخاب فایل و بازیابی</span>
+              </button>
+              {restoreMessage && (
+                <p className="text-[11px] text-center font-semibold text-[#2596BE]">
+                  {restoreMessage}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Section 3: Clean Zero (صفر کردن انتخابی داده‌ها جهت تحویل سیستم) */}
+          <div className="bg-rose-500/10 dark:bg-rose-950/20 border border-rose-500/30 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2 text-rose-700 dark:text-rose-400 font-black text-xs">
+                <RotateCcw className="w-4 h-4 text-rose-600" />
+                <span>صفر کردن انتخابی داده‌ها (جهت تحویل به مشتری)</span>
+              </div>
+              <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                امکان انتخاب و پاک‌سازی بخش‌های دلخواه (تراکنش‌ها، سفارشات، صندوق‌ها یا اشخاص)
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsGranularResetOpen(true)}
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl transition-all cursor-pointer shadow-xs shrink-0 flex items-center justify-center gap-1.5"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>انتخاب و صفر کردن داده‌ها</span>
+            </button>
           </div>
         </div>
       )}
@@ -2235,18 +2114,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
       )}
-
-      {/* Confirmation Modal: Data Reset (Seed) */}
-      <ConfirmModal
-        isOpen={resetModalType === 'seed'}
-        title="بازنشانی به داده‌های اولیه دمو"
-        message="آیا مایلید کلیه اطلاعات فعلی با داده‌های اولیه و نمونه دمو جایگزین شوند؟"
-        confirmText="بله، بازنشانی شود"
-        variant="warning"
-        isLoading={resetLoading}
-        onConfirm={handleConfirmReset}
-        onClose={() => setResetModalType(null)}
-      />
 
       {/* Confirmation Modal: User Deletion */}
       <ConfirmModal
