@@ -6,7 +6,7 @@ interface LoginViewProps {
   settings?: GameNetSettings;
   users?: UserType[];
   onLoginSuccess: (user: UserType) => void;
-  onLoginSubmit: (credentials: { username: string; password?: string }) => Promise<UserType>;
+  onLoginSubmit: (credentials: { username: string; password?: string; rememberMe?: boolean }) => Promise<UserType>;
 }
 
 export const LoginView: React.FC<LoginViewProps> = ({
@@ -16,6 +16,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
 }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +43,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
       const user = await onLoginSubmit({
         username: targetUser,
         password: targetPass,
+        rememberMe,
       });
 
 
@@ -136,6 +138,16 @@ export const LoginView: React.FC<LoginViewProps> = ({
               </button>
             </div>
           </div>
+
+          <label className="flex items-center gap-2 text-xs text-slate-400 hover:text-slate-300 cursor-pointer select-none pt-0.5">
+            <input
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              className="w-4 h-4 rounded border-slate-700 bg-slate-900 text-[#2596BE] focus:ring-[#2596BE] cursor-pointer"
+            />
+            <span>مرا در این دستگاه به خاطر بسپار (۷ روز)</span>
+          </label>
 
           <button
             type="submit"

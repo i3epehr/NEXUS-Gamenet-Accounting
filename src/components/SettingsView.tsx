@@ -627,8 +627,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  const handleDownloadBackup = () => {
-    window.location.href = '/api/backup/download';
+  const handleDownloadBackup = async () => {
+    try {
+      await api.downloadBackup();
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'خطا در دانلود فایل پشتیبان');
+    }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {

@@ -231,7 +231,28 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Fetch all core data
+  const clearPrivateState = useCallback(() => {
+    setUser(null);
+    setUsers([]);
+    setStats(null);
+    setAccounts([]);
+    setTransactions([]);
+    setCategories([]);
+    setProducts([]);
+    setGamingServices([]);
+    setInventoryLogs([]);
+    setOpenTabs([]);
+    setReservations([]);
+    setPersons([]);
+    setStaff([]);
+    setPayrollRecords([]);
+    setAuditLogs([]);
+    setIsUserLoginOpen(false);
+    setIsUnifiedSalesOpen(false);
+    setReceiptModalTx(null);
+  }, []);
+
+  // Fetch all core data (only invoked for authenticated sessions)
   const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
@@ -288,19 +309,68 @@ export default function App() {
       if (tabsData.tabs) setOpenTabs(tabsData.tabs);
       if (resvData.reservations) setReservations(resvData.reservations);
       if (usersData.users) setUsers(usersData.users);
-      if (userData.user) setUser(userData.user);
+      if (userData.user) {
+        setUser(userData.user);
+      } else {
+        clearPrivateState();
+      }
     } catch (err: unknown) {
       console.error('Data fetch error:', err);
       setError(err instanceof Error ? err.message : 'خطا در بارگذاری اطلاعات');
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [clearPrivateState]);
 
+  // Bootstrap authentication cleanly before loading any protected data
   useEffect(() => {
-    fetchData();
+    let active = true;
+    const bootstrapAuth = async () => {
+      try {
+        setIsLoading(true);
+        const [branding, meData] = await Promise.all([
+          api.getPublicBranding().catch(() => null),
+          api.getCurrentUser().catch(() => ({ user: null })),
+        ]);
+        if (!active) return;
+        if (branding?.name) {
+          setSettings((prev) => ({
+            ...prev,
+            name: branding.name || prev.name,
+          }));
+        }
+        if (meData?.user) {
+          setUser(meData.user);
+          await fetchData();
+        } else {
+          clearPrivateState();
+          setIsLoading(false);
+        }
+      } catch {
+        if (active) {
+          clearPrivateState();
+          setIsLoading(false);
+        }
+      }
+    };
+    bootstrapAuth();
+    return () => {
+      active = false;
+    };
+  }, [fetchData, clearPrivateState]);
 
-    // Background worker: Periodically check if any reservations have arrived at their scheduled time
+  // Auto-logout whenever server rejects an expired or revoked token (401)
+  useEffect(() => {
+    const onUnauthorized = () => {
+      clearPrivateState();
+    };
+    window.addEventListener('nexus:unauthorized', onUnauthorized);
+    return () => window.removeEventListener('nexus:unauthorized', onUnauthorized);
+  }, [clearPrivateState]);
+
+  // Background worker: Periodically check if any reservations have arrived (only while logged in)
+  useEffect(() => {
+    if (!user) return;
     const resvTimer = setInterval(async () => {
       const now = new Date();
       setNowTime(now);
@@ -319,7 +389,7 @@ export default function App() {
     }, 15000);
 
     return () => clearInterval(resvTimer);
-  }, [fetchData]);
+  }, [user, fetchData]);
 
   // Compute active reservation alerts based on settings
   const activeReservationAlerts = React.useMemo<ReservationGroupAlert[]>(() => {
@@ -534,9 +604,9 @@ export default function App() {
     return res;
   };
 
-  const handleLogout = () => {
-    api.logout();
-    setUser(null);
+  const handleLogout = async () => {
+    await api.logout();
+    clearPrivateState();
     try {
       localStorage.removeItem('nexus_active_tab');
     } catch {

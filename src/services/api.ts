@@ -20,19 +20,65 @@ import {
   User,
 } from '../types/index.ts';
 
+const AUTH_TOKEN_KEY = 'nexus_auth_token';
+const LEGACY_USER_ID_KEY = 'nexus_user_id';
+
+function getAuthToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    localStorage.removeItem(LEGACY_USER_ID_KEY);
+    return sessionStorage.getItem(AUTH_TOKEN_KEY) || localStorage.getItem(AUTH_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setAuthToken(token: string, rememberMe: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem(LEGACY_USER_ID_KEY);
+    if (rememberMe) {
+      localStorage.setItem(AUTH_TOKEN_KEY, token);
+    } else {
+      sessionStorage.setItem(AUTH_TOKEN_KEY, token);
+    }
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
+function clearAuthToken(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem(LEGACY_USER_ID_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const currentUserId = typeof window !== 'undefined' ? localStorage.getItem('nexus_user_id') : null;
+  const token = getAuthToken();
   const res = await fetch(url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json',
-      ...(currentUserId ? { 'x-auth-user-id': currentUserId } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options?.headers,
     },
   });
 
   if (!res.ok) {
+    if (res.status === 401 && !url.includes('/api/auth/login')) {
+      clearAuthToken();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('nexus:unauthorized'));
+      }
+    }
     let errorMsg = `خطای سرور (${res.status})`;
     try {
       const data = await res.json();
@@ -47,30 +93,57 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  // Public Branding (safe for login page)
+  async getPublicBranding(): Promise<{ name?: string; currency?: string; theme?: 'dark' | 'light' }> {
+    return fetchJson('/api/public/branding');
+  },
+
   // Auth & Users
   async login(
-    credentialsOrUsername: { username: string; password?: string } | string,
+    credentialsOrUsername: { username: string; password?: string; rememberMe?: boolean } | string,
     passwordParam?: string
-  ): Promise<{ token: string; user: User }> {
+  ): Promise<{ token: string; user: User; expiresAt?: string }> {
+    const previousToken = getAuthToken();
     const username = typeof credentialsOrUsername === 'object' ? credentialsOrUsername.username : credentialsOrUsername;
     const password = typeof credentialsOrUsername === 'object' ? credentialsOrUsername.password : passwordParam;
-    const result = await fetchJson<{ token: string; user: User }>('/api/auth/login', {
+    const rememberMe = typeof credentialsOrUsername === 'object' ? !!credentialsOrUsername.rememberMe : false;
+
+    const result = await fetchJson<{ token: string; user: User; expiresAt?: string }>('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, rememberMe }),
     });
-    if (result?.user?.id && typeof window !== 'undefined') {
-      localStorage.setItem('nexus_user_id', result.user.id);
+    if (result?.token) {
+      setAuthToken(result.token, rememberMe);
+    }
+    // If user was switching accounts cleanly, invalidate previous token on server
+    if (previousToken && previousToken !== result?.token) {
+      fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${previousToken}` },
+      }).catch(() => {});
     }
     return result;
   },
 
-  logout(): void {
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('nexus_user_id');
+  async logout(): Promise<void> {
+    const token = getAuthToken();
+    clearAuthToken();
+    if (token) {
+      try {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      } catch {
+        // ignore network errors on logout
+      }
     }
   },
 
-  async getCurrentUser(): Promise<{ user: User }> {
+  async getCurrentUser(): Promise<{ user: User | null }> {
+    if (!getAuthToken()) {
+      return { user: null };
+    }
     return fetchJson('/api/auth/me');
   },
 
@@ -625,6 +698,43 @@ export const api = {
 
   async getAuditLogs(): Promise<{ auditLogs: AuditLog[] }> {
     return fetchJson('/api/audit-logs');
+  },
+
+  async downloadBackup(): Promise<void> {
+    const token = getAuthToken();
+    const res = await fetch('/api/backup/download', {
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+    if (!res.ok) {
+      let errorMsg = `خطای سرور (${res.status})`;
+      try {
+        const data = await res.json();
+        if (data.error) errorMsg = data.error;
+      } catch {
+        // ignore
+      }
+      throw new Error(errorMsg);
+    }
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+    const asciiMatch = disposition.match(/filename="?([^";]+)"?/i);
+    const filename = utf8Match
+      ? decodeURIComponent(utf8Match[1].trim())
+      : asciiMatch
+      ? asciiMatch[1].trim()
+      : `nexus_backup_${Date.now()}.json`;
+
+    const blob = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(blobUrl);
   },
 
   async restoreBackup(data: unknown): Promise<{ success: boolean; message: string }> {

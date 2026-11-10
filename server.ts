@@ -1,11 +1,12 @@
 // NEXUS GameNet Backend Server - v1.1.0
-import express, { Request, Response } from 'express';
+import express, { NextFunction, Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { fileURLToPath } from 'url';
+import { AsyncLocalStorage } from 'async_hooks';
 
 const execAsync = promisify(exec);
 let isSystemUpdating = false;
@@ -42,6 +43,198 @@ app.use(express.urlencoded({ extended: true }));
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_FILE = path.join(DATA_DIR, 'nexus_db.json');
 const DB_BAK_FILE = path.join(DATA_DIR, 'nexus_db.json.bak');
+const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
+
+const SESSION_TTL_DEFAULT_MS = 12 * 60 * 60 * 1000; // 12 hours
+const SESSION_TTL_REMEMBER_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const LOGIN_MAX_FAILS = 10;
+const LOGIN_WINDOW_MS = 2 * 60 * 1000; // 2 minutes
+
+interface ServerSession {
+  token: string;
+  userId: string;
+  ip: string;
+  userAgent: string;
+  rememberMe: boolean;
+  createdAt: string;
+  lastActiveAt: string;
+  expiresAt: string;
+}
+
+interface AuthedRequest extends Request {
+  authUser?: User;
+  authSession?: ServerSession;
+}
+
+const authContextStorage = new AsyncLocalStorage<User>();
+const activeSessions = new Map<string, ServerSession>();
+const loginAttempts = new Map<string, { count: number; firstAttemptAt: number }>();
+let lastSessionSaveAt = 0;
+
+function getClientIp(req: Request): string {
+  return (req.ip || req.socket?.remoteAddress || 'unknown').toString();
+}
+
+function loadSessionsFromFile() {
+  try {
+    if (!fs.existsSync(SESSIONS_FILE)) return;
+    const raw = JSON.parse(fs.readFileSync(SESSIONS_FILE, 'utf-8'));
+    if (Array.isArray(raw)) {
+      const now = Date.now();
+      for (const s of raw) {
+        if (s && typeof s.token === 'string' && typeof s.userId === 'string' && Date.parse(s.expiresAt) > now) {
+          activeSessions.set(s.token, s);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Auth] Failed to load sessions file:', err);
+  }
+}
+
+function saveSessionsToFile(force = false) {
+  const now = Date.now();
+  if (!force && now - lastSessionSaveAt < 60000) return;
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    const list = Array.from(activeSessions.values()).filter((s) => Date.parse(s.expiresAt) > now);
+    const tmp = `${SESSIONS_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(list, null, 2), 'utf-8');
+    fs.renameSync(tmp, SESSIONS_FILE);
+    lastSessionSaveAt = now;
+  } catch (err) {
+    console.error('[Auth] Failed to save sessions file:', err);
+  }
+}
+
+function pruneExpiredSessions() {
+  const now = Date.now();
+  let removed = false;
+  for (const [token, session] of activeSessions.entries()) {
+    if (Date.parse(session.expiresAt) <= now) {
+      activeSessions.delete(token);
+      removed = true;
+    }
+  }
+  if (removed) {
+    saveSessionsToFile(true);
+  }
+}
+
+function createServerSession(user: User, req: Request, rememberMe = false): ServerSession {
+  pruneExpiredSessions();
+  const now = Date.now();
+  const ttl = rememberMe ? SESSION_TTL_REMEMBER_MS : SESSION_TTL_DEFAULT_MS;
+  const session: ServerSession = {
+    token: crypto.randomBytes(32).toString('hex'),
+    userId: user.id,
+    ip: getClientIp(req),
+    userAgent: String(req.headers['user-agent'] || '').slice(0, 200),
+    rememberMe: !!rememberMe,
+    createdAt: new Date(now).toISOString(),
+    lastActiveAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + ttl).toISOString(),
+  };
+  activeSessions.set(session.token, session);
+  saveSessionsToFile(true);
+  return session;
+}
+
+function extractBearerToken(req: Request): string | null {
+  const authHeader = req.headers.authorization;
+  if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+    const t = authHeader.slice(7).trim();
+    if (t.length >= 32) return t;
+  }
+  const altHeader = req.headers['x-auth-token'];
+  if (typeof altHeader === 'string' && altHeader.trim().length >= 32) {
+    return altHeader.trim();
+  }
+  return null;
+}
+
+function getValidSessionAndUser(req: Request, db: DatabaseSchema): { session: ServerSession; user: User } | null {
+  const token = extractBearerToken(req);
+  if (!token) return null;
+  const session = activeSessions.get(token);
+  if (!session) return null;
+  const now = Date.now();
+  if (Date.parse(session.expiresAt) <= now) {
+    activeSessions.delete(token);
+    saveSessionsToFile(true);
+    return null;
+  }
+  const user = db.users.find((u) => u.id === session.userId);
+  if (!user || user.active === false) {
+    activeSessions.delete(token);
+    saveSessionsToFile(true);
+    return null;
+  }
+  session.lastActiveAt = new Date(now).toISOString();
+  saveSessionsToFile(false);
+  return { session, user };
+}
+
+function revokeSessionToken(token: string) {
+  if (activeSessions.delete(token)) {
+    saveSessionsToFile(true);
+  }
+}
+
+function revokeUserSessions(userId: string, excludeToken?: string) {
+  let changed = false;
+  for (const [token, session] of activeSessions.entries()) {
+    if (session.userId === userId && token !== excludeToken) {
+      activeSessions.delete(token);
+      changed = true;
+    }
+  }
+  if (changed) {
+    saveSessionsToFile(true);
+  }
+}
+
+function sanitizeUser(user: User): Omit<User, 'password'> {
+  const { password: _removed, ...safe } = user;
+  return safe;
+}
+
+function hashPassword(plain: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(plain, salt, 64).toString('hex');
+  return `scrypt:${salt}:${derived}`;
+}
+
+function verifyPassword(plain: string, stored: string): boolean {
+  if (!stored) return false;
+  if (stored.startsWith('scrypt:')) {
+    const parts = stored.split(':');
+    if (parts.length !== 3) return false;
+    const [, salt, hexHash] = parts;
+    try {
+      const derived = crypto.scryptSync(plain, salt, 64);
+      const storedBuf = Buffer.from(hexHash, 'hex');
+      if (derived.length !== storedBuf.length) return false;
+      return crypto.timingSafeEqual(derived, storedBuf);
+    } catch {
+      return false;
+    }
+  }
+  const a = Buffer.from(plain, 'utf8');
+  const b = Buffer.from(stored, 'utf8');
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+function hasPerm(user: User | undefined, ...required: string[]): boolean {
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  const perms = user.permissions || [];
+  if (perms.includes('all')) return true;
+  return required.some((p) => perms.includes(p));
+}
 
 interface DatabaseSchema {
   settings: GameNetSettings;
@@ -173,7 +366,7 @@ function getInitialData(): DatabaseSchema {
       permissions: ['all'],
       active: true,
       phone: '09121112233',
-      password: 'admin',
+      password: hashPassword('admin'),
       createdAt: nowIso,
     },
     {
@@ -184,7 +377,7 @@ function getInitialData(): DatabaseSchema {
       permissions: ['view_dashboard', 'manage_tabs', 'manage_buffet'],
       active: true,
       phone: '09301234567',
-      password: '123',
+      password: hashPassword('123'),
       createdAt: nowIso,
     },
     {
@@ -195,7 +388,7 @@ function getInitialData(): DatabaseSchema {
       permissions: ['view_dashboard', 'view_reports', 'manage_accounts', 'manage_contacts'],
       active: true,
       phone: '09192223344',
-      password: '123',
+      password: hashPassword('123'),
       createdAt: nowIso,
     },
   ];
@@ -989,15 +1182,16 @@ function logAudit(
   entityId: string,
   action: AuditLog['action'],
   details: string,
-  userName = 'مدیر'
+  userName?: string
 ) {
+  const ctxUser = authContextStorage.getStore();
   db.auditLogs.unshift({
     id: `aud_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
     entityType,
     entityId,
     action,
-    userId: 'usr_admin',
-    userName,
+    userId: ctxUser?.id || 'usr_admin',
+    userName: userName || ctxUser?.fullName || 'مدیر',
     details,
     timestamp: new Date().toISOString(),
   });
@@ -1030,7 +1224,7 @@ function getCategoryForSection(
   };
 }
 
-// ======================== API ROUTES ========================
+// ======================== PUBLIC ROUTES ========================
 
 // Health & System Info
 app.get('/api/health', (_req: Request, res: Response) => {
@@ -1042,14 +1236,52 @@ app.get('/api/health', (_req: Request, res: Response) => {
   });
 });
 
-// Auth & Users
-app.post('/api/auth/login', (req: Request, res: Response) => {
-  const { username, password } = req.body;
+// Public minimal branding for Login Screen (no sensitive settings exposed)
+app.get('/api/public/branding', (_req: Request, res: Response) => {
   const db = loadDatabase();
-  const normalizedUsername = (username || '').trim().toLowerCase();
+  res.json({
+    name: db.settings.name,
+    currency: db.settings.currency,
+    theme: db.settings.theme,
+  });
+});
+
+// Auth & Session Lifecycle
+app.post('/api/auth/login', (req: Request, res: Response) => {
+  const { username, password, rememberMe } = req.body || {};
+  const normalizedUsername = String(username || '').trim().toLowerCase();
+  const inputPassword = String(password || '').trim();
+  const clientIp = getClientIp(req);
+  const rateKey = `${clientIp}:${normalizedUsername}`;
+
+  // Brute-force protection
+  const nowMs = Date.now();
+  const attempt = loginAttempts.get(rateKey);
+  if (attempt) {
+    if (nowMs - attempt.firstAttemptAt > LOGIN_WINDOW_MS) {
+      loginAttempts.delete(rateKey);
+    } else if (attempt.count >= LOGIN_MAX_FAILS) {
+      res.status(429).json({
+        error: 'تعداد تلاش‌های ناموفق بیش از حد مجاز است. لطفاً ۲ دقیقه دیگر مجدداً تلاش کنید.',
+      });
+      return;
+    }
+  }
+
+  const db = loadDatabase();
   const user = db.users.find((u) => u.username.toLowerCase() === normalizedUsername);
 
+  const recordFailedAttempt = () => {
+    const prev = loginAttempts.get(rateKey);
+    if (!prev || nowMs - prev.firstAttemptAt > LOGIN_WINDOW_MS) {
+      loginAttempts.set(rateKey, { count: 1, firstAttemptAt: nowMs });
+    } else {
+      prev.count += 1;
+    }
+  };
+
   if (!user) {
+    recordFailedAttempt();
     res.status(401).json({ error: 'کاربری با این نام کاربری یافت نشد' });
     return;
   }
@@ -1059,48 +1291,86 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     return;
   }
 
-  // Check individual user password, with fallback to legacy defaults
-  const expectedPassword = user.password || '123456';
-  const inputPassword = (password || '').trim();
-  const isPasswordValid =
-    inputPassword === expectedPassword ||
-    (user.role === 'admin' && (inputPassword === 'admin' || inputPassword === '123456')) ||
-    (inputPassword === '123' || inputPassword === '123456');
+  const storedPassword = user.password || '123456';
+  const isPasswordValid = verifyPassword(inputPassword, storedPassword);
 
   if (!isPasswordValid) {
+    recordFailedAttempt();
     res.status(401).json({ error: 'رمز عبور وارد شده اشتباه است' });
     return;
   }
 
-  logAudit(db, 'auth', user.id, 'login', `ورود کاربر ${user.fullName} به سیستم`, user.fullName);
+  // Valid login -> reset rate limiter
+  loginAttempts.delete(rateKey);
+
+  // Transparently upgrade legacy plaintext password to scrypt hash
+  if (!user.password || !user.password.startsWith('scrypt:')) {
+    user.password = hashPassword(inputPassword);
+  }
+
+  const session = createServerSession(user, req, !!rememberMe);
+  logAudit(db, 'auth', user.id, 'login', `ورود کاربر ${user.fullName} به سیستم (${session.ip})`, user.fullName);
   saveDatabase(db);
 
   res.json({
-    token: `token_${user.id}_${Date.now()}`,
-    user,
+    token: session.token,
+    user: sanitizeUser(user),
+    expiresAt: session.expiresAt,
   });
+});
+
+app.post('/api/auth/logout', (req: Request, res: Response) => {
+  const token = extractBearerToken(req);
+  if (token) {
+    const db = loadDatabase();
+    const session = activeSessions.get(token);
+    if (session) {
+      const user = db.users.find((u) => u.id === session.userId);
+      if (user) {
+        logAudit(db, 'auth', user.id, 'login', `خروج کاربر ${user.fullName} از سیستم`, user.fullName);
+        saveDatabase(db);
+      }
+      revokeSessionToken(token);
+    }
+  }
+  res.json({ success: true });
 });
 
 app.get('/api/auth/me', (req: Request, res: Response) => {
   const db = loadDatabase();
-  const userId = req.headers['x-auth-user-id'] as string;
-  if (userId) {
-    const user = db.users.find((u) => u.id === userId);
-    if (user && user.active !== false) {
-      res.json({ user });
-      return;
-    }
+  const auth = getValidSessionAndUser(req, db);
+  if (auth) {
+    res.json({ user: sanitizeUser(auth.user) });
+    return;
   }
   res.json({ user: null });
 });
 
-// Users Management
-app.get('/api/users', (_req: Request, res: Response) => {
+// ======================== AUTH MIDDLEWARE ========================
+// Locks EVERY /api/* route defined below behind valid server-side session token
+app.use('/api', (req: AuthedRequest, res: Response, next: NextFunction) => {
   const db = loadDatabase();
-  res.json({ users: db.users });
+  const auth = getValidSessionAndUser(req, db);
+  if (!auth) {
+    res.status(401).json({ error: 'نشست کاربری معتبر نیست یا منقضی شده است. لطفاً مجدداً وارد شوید.' });
+    return;
+  }
+  req.authUser = auth.user;
+  req.authSession = auth.session;
+  authContextStorage.run(auth.user, () => next());
 });
 
-app.post('/api/users', (req: Request, res: Response) => {
+// Users Management (Passwords are ALWAYS stripped from responses and stored hashed)
+app.get('/api/users', (_req: Request, res: Response) => {
+  const db = loadDatabase();
+  res.json({ users: db.users.map(sanitizeUser) });
+});
+
+app.post('/api/users', (req: AuthedRequest, res: Response) => {
+  if (!hasPerm(req.authUser, 'manage_users')) {
+    res.status(403).json({ error: 'شما مجوز مدیریت کاربران را ندارید' });
+    return;
+  }
   const { username, fullName, role, permissions, phone, password } = req.body;
   if (!username || !fullName) {
     res.status(400).json({ error: 'نام و نام کاربری الزامی است' });
@@ -1112,6 +1382,7 @@ app.post('/api/users', (req: Request, res: Response) => {
     return;
   }
 
+  const rawPassword = (password || '123456').trim();
   const newUser: User = {
     id: `usr_${Date.now()}`,
     username: username.trim(),
@@ -1120,17 +1391,21 @@ app.post('/api/users', (req: Request, res: Response) => {
     permissions: Array.isArray(permissions) ? permissions : ['manage_tabs', 'manage_buffet'],
     active: true,
     phone: phone?.trim(),
-    password: (password || '123456').trim(),
+    password: hashPassword(rawPassword),
     createdAt: new Date().toISOString(),
   };
 
   db.users.push(newUser);
   logAudit(db, 'user', newUser.id, 'create', `ایجاد کاربر: ${newUser.fullName} (${newUser.role})`);
   saveDatabase(db);
-  res.status(201).json(newUser);
+  res.status(201).json(sanitizeUser(newUser));
 });
 
-app.put('/api/users/:id', (req: Request, res: Response) => {
+app.put('/api/users/:id', (req: AuthedRequest, res: Response) => {
+  if (!hasPerm(req.authUser, 'manage_users')) {
+    res.status(403).json({ error: 'شما مجوز ویرایش کاربران را ندارید' });
+    return;
+  }
   const { id } = req.params;
   const { fullName, role, permissions, active, phone, password } = req.body;
   const db = loadDatabase();
@@ -1140,19 +1415,33 @@ app.put('/api/users/:id', (req: Request, res: Response) => {
     return;
   }
 
+  const passwordChanged = !!(password && password.trim());
+  const deactivated = active === false && user.active !== false;
+
   if (fullName !== undefined) user.fullName = fullName.trim();
   if (role !== undefined) user.role = role;
   if (permissions !== undefined) user.permissions = permissions;
   if (active !== undefined) user.active = active;
   if (phone !== undefined) user.phone = phone.trim();
-  if (password && password.trim()) user.password = password.trim();
+  if (passwordChanged) user.password = hashPassword(password.trim());
+
+  if (deactivated) {
+    revokeUserSessions(id);
+  } else if (passwordChanged) {
+    // Keep current admin's active token if editing self, kick all other sessions for that user
+    revokeUserSessions(id, req.authSession?.token);
+  }
 
   logAudit(db, 'user', id, 'update', `ویرایش کاربر: ${user.fullName}`);
   saveDatabase(db);
-  res.json(user);
+  res.json(sanitizeUser(user));
 });
 
-app.delete('/api/users/:id', (req: Request, res: Response) => {
+app.delete('/api/users/:id', (req: AuthedRequest, res: Response) => {
+  if (!hasPerm(req.authUser, 'manage_users')) {
+    res.status(403).json({ error: 'شما مجوز حذف کاربران را ندارید' });
+    return;
+  }
   const { id } = req.params;
   const db = loadDatabase();
   if (id === 'usr_admin') {
@@ -1165,6 +1454,7 @@ app.delete('/api/users/:id', (req: Request, res: Response) => {
     return;
   }
   const deleted = db.users.splice(index, 1)[0];
+  revokeUserSessions(id);
   logAudit(db, 'user', id, 'delete', `حذف کاربر: ${deleted.fullName}`);
   saveDatabase(db);
   res.json({ success: true, message: 'کاربر با موفقیت حذف شد' });
@@ -1664,7 +1954,11 @@ app.put('/api/transactions/:id', (req: Request, res: Response) => {
 });
 
 // Delete Transaction
-app.delete('/api/transactions/:id', (req: Request, res: Response) => {
+app.delete('/api/transactions/:id', (req: AuthedRequest, res: Response) => {
+  if (!hasPerm(req.authUser, 'delete_transactions')) {
+    res.status(403).json({ error: 'شما مجوز حذف تراکنش‌ها را ندارید' });
+    return;
+  }
   const { id } = req.params;
   const db = loadDatabase();
   const txIndex = db.transactions.findIndex((t) => t.id === id);
@@ -4348,7 +4642,18 @@ app.get('/api/settings', (_req: Request, res: Response) => {
   res.json({ settings: db.settings });
 });
 
-app.put('/api/settings', (req: Request, res: Response) => {
+app.put('/api/settings', (req: AuthedRequest, res: Response) => {
+  const keys = Object.keys(req.body || {});
+  const isOnlyBuffetCats = keys.length > 0 && keys.every((k) => k === 'buffetCategories');
+  if (isOnlyBuffetCats) {
+    if (!hasPerm(req.authUser, 'manage_settings', 'manage_buffet')) {
+      res.status(403).json({ error: 'شما مجوز ویرایش دسته‌بندی بوفه را ندارید' });
+      return;
+    }
+  } else if (!hasPerm(req.authUser, 'manage_settings')) {
+    res.status(403).json({ error: 'شما مجوز تغییر تنظیمات سیستم را ندارید' });
+    return;
+  }
   const db = loadDatabase();
   db.settings = { ...db.settings, ...req.body };
   logAudit(db, 'settings', 'sys', 'update', 'به‌روزرسانی تنظیمات عمومی سیستم');
@@ -4362,16 +4667,33 @@ app.get('/api/audit-logs', (_req: Request, res: Response) => {
 });
 
 // Full Backup Download (JSON)
-app.get('/api/backup/download', (_req: Request, res: Response) => {
+app.get('/api/backup/download', (req: AuthedRequest, res: Response) => {
+  if (!hasPerm(req.authUser, 'manage_settings')) {
+    res.status(403).json({ error: 'شما مجوز دانلود فایل پشتیبان را ندارید' });
+    return;
+  }
   const db = loadDatabase();
-  const safeName = (db.settings.name || 'GameNet').replace(/[^a-zA-Z0-9_\u0600-\u06FF]/g, '_');
-  res.setHeader('Content-Disposition', `attachment; filename=${safeName}_backup_${Date.now()}.json`);
+  const ts = Date.now();
+  const asciiName =
+    (db.settings.name || 'NexusGameNet')
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '') || 'nexus_gamenet';
+  const utf8Name = (db.settings.name || 'GameNet').replace(/[^a-zA-Z0-9_\u0600-\u06FF-]/g, '_');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${asciiName}_backup_${ts}.json"; filename*=UTF-8''${encodeURIComponent(`${utf8Name}_backup_${ts}.json`)}`
+  );
   res.setHeader('Content-Type', 'application/json');
   res.send(JSON.stringify(db, null, 2));
 });
 
 // Restore from JSON Backup
-app.post('/api/backup/restore', (req: Request, res: Response) => {
+app.post('/api/backup/restore', (req: AuthedRequest, res: Response) => {
+  if (!hasPerm(req.authUser, 'manage_settings')) {
+    res.status(403).json({ error: 'شما مجوز بازیابی فایل پشتیبان را ندارید' });
+    return;
+  }
   const backupData = req.body;
   if (!backupData || !backupData.accounts || !backupData.transactions) {
     res.status(400).json({ error: 'فایل پشتیبان نامعتبر است' });
@@ -4382,7 +4704,11 @@ app.post('/api/backup/restore', (req: Request, res: Response) => {
 });
 
 // Reset or Clean Zero Data for Client Handover with Granular Selection
-app.post('/api/reset-data', (req: Request, res: Response) => {
+app.post('/api/reset-data', (req: AuthedRequest, res: Response) => {
+  if (!hasPerm(req.authUser, 'manage_settings')) {
+    res.status(403).json({ error: 'شما مجوز بازنشانی یا صفر کردن داده‌ها را ندارید' });
+    return;
+  }
   const { clean } = req.query;
   const options = req.body?.options;
   const isCustomClean = options && typeof options === 'object' && Object.keys(options).length > 0;
@@ -4477,7 +4803,11 @@ app.post('/api/reset-data', (req: Request, res: Response) => {
 // System Update & PM2 Management API Routes
 // ==========================================
 
-app.get('/api/system/update-status', async (_req: Request, res: Response) => {
+app.get('/api/system/update-status', async (req: AuthedRequest, res: Response) => {
+  if (!hasPerm(req.authUser, 'manage_settings')) {
+    res.status(403).json({ error: 'شما مجوز مشاهده وضعیت بروزرسانی سرور را ندارید' });
+    return;
+  }
   const isGitRepo = fs.existsSync(path.join(__dirname, '.git'));
   let currentCommit = 'unknown';
   let currentBranch = 'main';
@@ -4566,7 +4896,11 @@ app.get('/api/system/update-status', async (_req: Request, res: Response) => {
   });
 });
 
-app.post('/api/system/check-updates', async (_req: Request, res: Response) => {
+app.post('/api/system/check-updates', async (req: AuthedRequest, res: Response) => {
+  if (!hasPerm(req.authUser, 'manage_settings')) {
+    res.status(403).json({ success: false, error: 'شما مجوز بررسی بروزرسانی سرور را ندارید' });
+    return;
+  }
   const isGitRepo = fs.existsSync(path.join(__dirname, '.git'));
   if (!isGitRepo) {
     res.status(400).json({ success: false, error: 'پروژه جاری به عنوان مخزن گیت شناسایی نشد.' });
@@ -4628,7 +4962,11 @@ app.post('/api/system/check-updates', async (_req: Request, res: Response) => {
   }
 });
 
-app.post('/api/system/trigger-update', async (_req: Request, res: Response) => {
+app.post('/api/system/trigger-update', async (req: AuthedRequest, res: Response) => {
+  if (!hasPerm(req.authUser, 'manage_settings')) {
+    res.status(403).json({ success: false, error: 'شما مجوز اجرای بروزرسانی سرور را ندارید' });
+    return;
+  }
   if (isSystemUpdating) {
     res.status(409).json({ error: 'یک فرآیند بروزرسانی در حال اجرا است. لطفاً شکیبا باشید.' });
     return;
@@ -4728,7 +5066,11 @@ app.post('/api/system/trigger-update', async (_req: Request, res: Response) => {
   }
 });
 
-app.post('/api/system/restart', (_req: Request, res: Response) => {
+app.post('/api/system/restart', (req: AuthedRequest, res: Response) => {
+  if (!hasPerm(req.authUser, 'manage_settings')) {
+    res.status(403).json({ success: false, error: 'شما مجوز راه‌اندازی مجدد سرور را ندارید' });
+    return;
+  }
   res.json({
     success: true,
     message: 'دستور راه‌اندازی مجدد سرور صادر شد. صفحه تا ۳ ثانیه دیگر خودکار بازیابی می‌شود.',
@@ -4756,10 +5098,11 @@ async function startServer() {
   // Clean up any stale temp files from previous abrupt shutdowns
   cleanupOrphanedTempFiles();
 
-  // Eagerly load and validate database into authoritative memory state
+  // Eagerly load active server sessions and validate database into authoritative memory state
+  loadSessionsFromFile();
   try {
     const initialDb = loadDatabase();
-    console.log(`[Database] Initialized successfully. Loaded ${initialDb.users.length} users, ${initialDb.transactions.length} transactions, ${initialDb.accounts.length} accounts.`);
+    console.log(`[Database] Initialized successfully. Loaded ${initialDb.users.length} users, ${initialDb.transactions.length} transactions, ${initialDb.accounts.length} accounts. Active sessions: ${activeSessions.size}`);
   } catch (dbErr) {
     console.error('[Database] Failed eager database startup verification:', dbErr);
   }
