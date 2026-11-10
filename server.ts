@@ -2748,6 +2748,7 @@ function checkAndAutoOpenDueReservations(
         );
       }
 
+      const ctxUser = authContextStorage.getStore();
       const newTab: OpenTab = {
         id: `tab_auto_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         title: resv.title,
@@ -2763,6 +2764,8 @@ function checkAndAutoOpenDueReservations(
         notes: `بازگشایی خودکار نوبت رزرو (ساعت ${resv.startTime})${resv.depositAmount > 0 ? ` [بیعانه: ${resv.depositAmount.toLocaleString('fa-IR')} ت]` : ''}${resv.notes ? ` - ${resv.notes}` : ''}`,
         startedAt: nowIso,
         status: 'open',
+        openedByUserId: resv.createdByUserId || ctxUser?.id,
+        openedByName: resv.createdByName || ctxUser?.fullName || ctxUser?.username || 'سیستم (رزرو)',
         createdAt: nowIso,
         updatedAt: nowIso,
       };
@@ -2849,7 +2852,7 @@ app.get('/api/tabs', (_req: Request, res: Response) => {
   res.json({ tabs: db.openTabs || [] });
 });
 
-app.post('/api/tabs', (req: Request, res: Response) => {
+app.post('/api/tabs', (req: AuthedRequest, res: Response) => {
   const { title, personId, customerName, customerPhone, notes } = req.body;
   if (!title) {
     res.status(400).json({ error: 'نام میز یا اتاق الزامی است' });
@@ -2872,6 +2875,8 @@ app.post('/api/tabs', (req: Request, res: Response) => {
     notes: notes?.trim(),
     startedAt: nowIso,
     status: 'open',
+    openedByUserId: req.authUser?.id,
+    openedByName: req.authUser?.fullName || req.authUser?.username,
     createdAt: nowIso,
   };
 
@@ -3665,7 +3670,7 @@ app.post('/api/reservations/check-auto-open', (req: Request, res: Response) => {
   res.json(result);
 });
 
-app.post('/api/reservations', (req: Request, res: Response) => {
+app.post('/api/reservations', (req: AuthedRequest, res: Response) => {
   const {
     title,
     customerName,
@@ -3761,6 +3766,8 @@ app.post('/api/reservations', (req: Request, res: Response) => {
         count > 1
           ? `${notes?.trim() ? `${notes.trim()} - ` : ''}رزرو گروهی (${count} دستگاه برای ${finalCustomerName})`
           : notes?.trim() || undefined,
+      createdByUserId: req.authUser?.id,
+      createdByName: req.authUser?.fullName || req.authUser?.username,
       createdAt: nowIso,
     };
 
@@ -3826,7 +3833,7 @@ app.delete('/api/reservations/:id', (req: Request, res: Response) => {
 });
 
 // Convert reservation to active table tab
-app.post('/api/reservations/:id/convert-to-tab', (req: Request, res: Response) => {
+app.post('/api/reservations/:id/convert-to-tab', (req: AuthedRequest, res: Response) => {
   const { id } = req.params;
   const db = loadDatabase();
   const resv = db.reservations.find((r) => r.id === id);
@@ -3853,6 +3860,8 @@ app.post('/api/reservations/:id/convert-to-tab', (req: Request, res: Response) =
     notes: `از رزرو ساعت ${resv.startTime}${resv.depositAmount > 0 ? ` (بیعانه: ${resv.depositAmount} تومان)` : ''} ${resv.notes ? `- ${resv.notes}` : ''}`,
     startedAt: nowIso,
     status: 'open',
+    openedByUserId: req.authUser?.id || resv.createdByUserId,
+    openedByName: req.authUser?.fullName || req.authUser?.username || resv.createdByName,
     createdAt: nowIso,
   };
 
@@ -4297,7 +4306,7 @@ app.get('/api/reports/pnl', (req: Request, res: Response) => {
 
 // ======================== UNIFIED INSTANT CHECKOUT API ========================
 // Handles console rent + buffet items simultaneously with table info & closed invoice creation
-app.post('/api/checkout/unified', (req: Request, res: Response) => {
+app.post('/api/checkout/unified', (req: AuthedRequest, res: Response) => {
   const {
     cart,
     tableOption,
@@ -4610,6 +4619,8 @@ app.post('/api/checkout/unified', (req: Request, res: Response) => {
       discount: 0,
       finalAmount: finalAmount,
       checkoutTransactionId: primaryTxId,
+      openedByUserId: req.authUser?.id,
+      openedByName: req.authUser?.fullName || req.authUser?.username,
       createdAt: date || nowIso,
       updatedAt: nowIso,
     };

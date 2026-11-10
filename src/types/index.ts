@@ -193,6 +193,8 @@ export interface OpenTab {
   timerStoppedAt?: string; // زمان توقف تایمر (ISO)
   timerCalculatedCost?: number; // آخرین مبلغ محاسبه شده تایم
   smartLaunchSettled?: SmartLaunchSettlement; // جزئیات تسویه در اسمارت‌لانچ
+  openedByUserId?: string; // شناسه ادمین یا اپراتور بازکننده میز
+  openedByName?: string; // نام ادمین یا اپراتور بازکننده میز
 }
 
 export type ReservationStatus = 'pending' | 'confirmed' | 'cancelled' | 'completed';
@@ -212,6 +214,8 @@ export interface Reservation {
   depositAccountId?: string;
   status: ReservationStatus;
   notes?: string;
+  createdByUserId?: string;
+  createdByName?: string;
   createdAt: string;
 }
 

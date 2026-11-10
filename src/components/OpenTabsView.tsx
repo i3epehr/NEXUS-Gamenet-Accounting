@@ -3,6 +3,7 @@ import {
   Gamepad2,
   Clock,
   User,
+  UserCheck,
   CheckCircle2,
   Trash2,
   Edit2,
@@ -990,11 +991,20 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
                   <div className="p-4 border-b border-slate-100 dark:border-slate-800/80 bg-slate-50/60 dark:bg-slate-900/40">
                     <div className="flex items-start justify-between gap-2">
                       <div className="space-y-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
                           <h3 className="font-bold text-sm text-slate-900 dark:text-white truncate">
                             {tab.title}
                           </h3>
+                          {tab.openedByName && (
+                            <span
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-500/10 text-sky-700 dark:text-sky-300 border border-sky-500/20 shrink-0"
+                              title={`بازگشایی میز توسط ${tab.openedByName}`}
+                            >
+                              <UserCheck className="w-3 h-3 shrink-0" />
+                              <span>{tab.openedByName}</span>
+                            </span>
+                          )}
                         </div>
                         <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono">
                           <Clock className="w-3 h-3 text-[#2596BE]" />
@@ -1269,9 +1279,18 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
                   >
                     <div className="flex items-start justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
                       <div>
-                        <div className="flex items-center gap-2">
-                          <span className="w-2 h-2 rounded-full bg-slate-400"></span>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="w-2 h-2 rounded-full bg-slate-400 shrink-0"></span>
                           <h3 className="font-bold text-sm text-slate-800 dark:text-slate-200">{ct.title}</h3>
+                          {ct.openedByName && (
+                            <span
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shrink-0"
+                              title={`بازگشایی میز توسط ${ct.openedByName}`}
+                            >
+                              <UserCheck className="w-2.5 h-2.5 text-[#2596BE] shrink-0" />
+                              <span>{ct.openedByName}</span>
+                            </span>
+                          )}
                         </div>
                         <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-1 font-mono">
                           <Clock className="w-3 h-3" />
@@ -1497,6 +1516,15 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
                         <h3 className="font-bold text-sm text-slate-900 dark:text-white">
                           {resv.title}
                         </h3>
+                        {resv.createdByName && (
+                          <span
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shrink-0"
+                            title={`ثبت رزرو توسط ${resv.createdByName}`}
+                          >
+                            <UserCheck className="w-2.5 h-2.5 text-[#2596BE] shrink-0" />
+                            <span>{resv.createdByName}</span>
+                          </span>
+                        )}
                         {(resv.groupId || (resv.tableCount && resv.tableCount > 1)) && (
                           <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-700 dark:text-purple-400 border border-purple-500/20">
                             رزرو گروهی ({resv.tableCount || 'چند'} میز)
