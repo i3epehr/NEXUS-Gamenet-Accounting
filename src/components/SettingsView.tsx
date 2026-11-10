@@ -159,6 +159,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       setCheckResult(null);
       const res = await api.checkSystemUpdates();
       setCheckResult(res);
+      if (res.currentVersion) {
+        setUpdateStatus((prev) => (prev ? { ...prev, packageVersion: res.currentVersion! } : prev));
+      }
     } catch (err: any) {
       setCheckResult({
         success: false,
@@ -1752,7 +1755,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <h3 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
                     <span>بروزرسانی آنلاین نرم‌افزار</span>
                     <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                      v{updateStatus?.packageVersion || '1.1.0'}
+                      {statusLoading ? 'v...' : `v${updateStatus?.packageVersion || '2.4.1'}`}
                     </span>
                   </h3>
                   <p className="text-xs text-slate-500 mt-0.5">
@@ -1804,7 +1807,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   )}
                   <span>{checkResult.message}</span>
                   {checkResult.behindCount && checkResult.behindCount > 0 && (
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-700 dark:text-amber-300 mr-auto">
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-700 dark:text-amber-300 mr-auto font-mono">
+                      {checkResult.remoteVersion ? `v${checkResult.remoteVersion} • ` : ''}
                       {checkResult.behindCount} تغییر جدید
                     </span>
                   )}

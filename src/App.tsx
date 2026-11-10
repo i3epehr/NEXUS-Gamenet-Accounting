@@ -1,4 +1,4 @@
-// NEXUS GameNet Accounting System - v1.1.0 (Sync Trigger)
+// NEXUS GameNet Accounting System - v2.4.1
 import React, { useState, useEffect, useCallback } from 'react';
 import { api } from './services/api.ts';
 import {

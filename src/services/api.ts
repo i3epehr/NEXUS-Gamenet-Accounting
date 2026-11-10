@@ -812,6 +812,8 @@ export const api = {
     hasUpdate: boolean;
     behindCount?: number;
     commits?: string[];
+    currentVersion?: string;
+    remoteVersion?: string;
     message: string;
     error?: string;
   }> {
@@ -820,6 +822,7 @@ export const api = {
 
   async triggerSystemUpdate(): Promise<{
     success: boolean;
+    newVersion?: string;
     message: string;
     logs: string[];
     restarting?: boolean;

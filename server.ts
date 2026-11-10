@@ -1,4 +1,4 @@
-// NEXUS GameNet Backend Server - v1.1.0
+// NEXUS GameNet Backend Server - v2.4.1
 import express, { NextFunction, Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -4803,6 +4803,82 @@ app.post('/api/reset-data', (req: AuthedRequest, res: Response) => {
 // System Update & PM2 Management API Routes
 // ==========================================
 
+/**
+ * Automatically derives the live application version from package.json base version
+ * plus the number of commits applied since that version was introduced in Git.
+ * Starting at 2.4.1, each subsequent commit on main advances the patch automatically
+ * (2.4.1 -> 2.4.2 -> 2.4.3 ...) without needing manual version bumps.
+ */
+async function resolveAppVersion(gitRef = 'HEAD'): Promise<string> {
+  let baseVersion = '2.4.1';
+  try {
+    if (gitRef === 'HEAD') {
+      const pkgPath = path.join(__dirname, 'package.json');
+      if (fs.existsSync(pkgPath)) {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+        if (pkg.version) baseVersion = String(pkg.version).trim();
+      }
+    } else {
+      const { stdout: pkgText } = await execAsync(`git show ${gitRef}:package.json`, {
+        cwd: __dirname,
+        timeout: 5000,
+      });
+      const pkg = JSON.parse(pkgText);
+      if (pkg.version) baseVersion = String(pkg.version).trim();
+    }
+  } catch {
+    return baseVersion;
+  }
+
+  const isGitRepo = fs.existsSync(path.join(__dirname, '.git'));
+  if (!isGitRepo) return baseVersion;
+
+  try {
+    const { stdout: hashesOut } = await execAsync(`git log -n 30 --format=%H ${gitRef} -- package.json`, {
+      cwd: __dirname,
+      timeout: 5000,
+    });
+    const hashes = hashesOut.trim().split('\n').filter(Boolean);
+    let introCommit: string | null = null;
+
+    for (const h of hashes) {
+      try {
+        const { stdout: pastPkgText } = await execAsync(`git show ${h}:package.json`, {
+          cwd: __dirname,
+          timeout: 5000,
+        });
+        const pastPkg = JSON.parse(pastPkgText);
+        if (String(pastPkg.version || '').trim() === baseVersion) {
+          introCommit = h;
+        } else {
+          break;
+        }
+      } catch {
+        break;
+      }
+    }
+
+    if (!introCommit) {
+      return baseVersion;
+    }
+
+    const { stdout: countOut } = await execAsync(`git rev-list --count ${introCommit}..${gitRef}`, {
+      cwd: __dirname,
+      timeout: 5000,
+    });
+    const extraCommits = parseInt(countOut.trim(), 10) || 0;
+    if (extraCommits <= 0) return baseVersion;
+
+    const parts = baseVersion.split('.').map((n) => parseInt(n, 10));
+    if (parts.length === 3 && parts.every((n) => !Number.isNaN(n))) {
+      return `${parts[0]}.${parts[1]}.${parts[2] + extraCommits}`;
+    }
+    return `${baseVersion}.${extraCommits}`;
+  } catch {
+    return baseVersion;
+  }
+}
+
 app.get('/api/system/update-status', async (req: AuthedRequest, res: Response) => {
   if (!hasPerm(req.authUser, 'manage_settings')) {
     res.status(403).json({ error: 'شما مجوز مشاهده وضعیت بروزرسانی سرور را ندارید' });
@@ -4864,18 +4940,7 @@ app.get('/api/system/update-status', async (req: AuthedRequest, res: Response) =
     }
   }
 
-  // Read package version
-  let packageVersion = '1.1.0';
-  try {
-    const pkgPath = path.join(__dirname, 'package.json');
-    if (fs.existsSync(pkgPath)) {
-      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-      if (pkg.version) packageVersion = pkg.version;
-    }
-  } catch {
-    // ignore
-  }
-
+  const packageVersion = await resolveAppVersion('HEAD');
   const pm2Managed = process.env.pm_id !== undefined || process.env.PM2_HOME !== undefined;
 
   res.json({
@@ -4915,6 +4980,7 @@ app.post('/api/system/check-updates', async (req: AuthedRequest, res: Response) 
     const { stdout: localHead } = await execAsync('git rev-parse HEAD', { cwd: __dirname, timeout: 5000 });
     const { stdout: remoteHead } = await execAsync('git rev-parse origin/main', { cwd: __dirname, timeout: 5000 });
 
+    const currentVersion = await resolveAppVersion('HEAD');
     const isDifferent = localHead.trim() !== remoteHead.trim();
 
     if (!isDifferent) {
@@ -4923,12 +4989,14 @@ app.post('/api/system/check-updates', async (req: AuthedRequest, res: Response) 
         hasUpdate: false,
         behindCount: 0,
         commits: [],
-        message: 'برنامه شما کاملاً بروز است و تغییری در گیت‌هاب ثبت نشده است.',
+        currentVersion,
+        remoteVersion: currentVersion,
+        message: `برنامه شما کاملاً بروز است (نسخه v${currentVersion}).`,
       });
       return;
     }
 
-    // 3. Count commits behind and get titles
+    // 3. Count commits behind, get titles and target remote version
     let behindCount = 1;
     try {
       const { stdout: countOut } = await execAsync('git rev-list --count HEAD..origin/main', { cwd: __dirname, timeout: 5000 });
@@ -4945,12 +5013,16 @@ app.post('/api/system/check-updates', async (req: AuthedRequest, res: Response) 
       // ignore
     }
 
+    const remoteVersion = await resolveAppVersion('origin/main');
+
     res.json({
       success: true,
       hasUpdate: true,
       behindCount,
       commits,
-      message: `${behindCount} بروزرسانی جدید در گیت‌هاب موجود است.`,
+      currentVersion,
+      remoteVersion,
+      message: `نسخه جدید v${remoteVersion} در گیت‌هاب موجود است (${behindCount} بروزرسانی جدید).`,
     });
   } catch (err: any) {
     console.error('[Check Updates Error]:', err);
@@ -5023,19 +5095,22 @@ app.post('/api/system/trigger-update', async (req: AuthedRequest, res: Response)
     await execAsync('npm run build', { cwd: __dirname, timeout: 60000 });
     logs.push('[کامپایل]: بیلد با موفقیت ایجاد شد.');
 
+    const newVersion = await resolveAppVersion('HEAD');
+
     // Step 5: Audit Log in DB
     const db = loadDatabase();
-    logAudit(db, 'settings', 'sys', 'update', 'بروزرسانی موفق سیستم از طریق پنل تنظیمات');
+    logAudit(db, 'settings', 'sys', 'update', `بروزرسانی موفق سیستم به نسخه v${newVersion} از طریق پنل تنظیمات`);
     saveDatabase(db);
 
     logs.push('====================================================');
-    logs.push('آپدیت با موفقیت کامل نصب شد و دیتابیس کاملاً حفظ گردید!');
+    logs.push(`آپدیت به نسخه v${newVersion} با موفقیت نصب شد و دیتابیس کاملاً حفظ گردید!`);
     logs.push('سرور تا ۲ ثانیه دیگر به صورت خودکار مجدداً راه‌اندازی (Restart) می‌شود...');
 
     // Respond immediately before restarting server
     res.json({
       success: true,
-      message: 'بروزرسانی با موفقیت انجام شد! دیتابیس در امنیت کامل حفظ شد و سرور در حال راه‌اندازی مجدد است.',
+      newVersion,
+      message: `بروزرسانی به نسخه v${newVersion} با موفقیت انجام شد! سرور در حال راه‌اندازی مجدد است.`,
       logs,
       restarting: true,
     });
