@@ -926,6 +926,7 @@ export default function App() {
                   onCreateStaff={api.createStaff}
                   onUpdateStaff={api.updateStaff}
                   onDeleteStaff={api.deleteStaff}
+                  onDeletePayroll={api.deletePayrollRecord}
                   onRefresh={fetchData}
                 />
               )}

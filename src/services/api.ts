@@ -670,6 +670,12 @@ export const api = {
     });
   },
 
+  async deletePayrollRecord(id: string): Promise<{ success: boolean; refunded?: boolean; message: string }> {
+    return fetchJson(`/api/staff/payroll/${id}`, {
+      method: 'DELETE',
+    });
+  },
+
   // Reports
   async getPnL(params?: { startDate?: string; endDate?: string }): Promise<{
     totalIncome: number;

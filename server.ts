@@ -2007,6 +2007,8 @@ app.delete('/api/transactions/:id', (req: AuthedRequest, res: Response) => {
   }
 
   db.transactions.splice(txIndex, 1);
+  // Keep payroll history synced if the deleted transaction was a salary payment
+  db.payrollRecords = db.payrollRecords.filter((p) => p.transactionId !== tx.id);
   logAudit(db, 'transaction', tx.id, 'delete', `حذف تراکنش: ${tx.amount} تومان (${tx.description})`);
   saveDatabase(db);
   res.json({ success: true, message: 'تراکنش حذف شد' });
@@ -4264,6 +4266,56 @@ app.post('/api/staff/pay', (req: Request, res: Response) => {
   saveDatabase(db);
 
   res.status(201).json({ success: true, payroll, transaction: tx, account: acc });
+});
+
+// Delete payroll record & safely roll back linked accounting transaction if still present
+app.delete('/api/staff/payroll/:id', (req: AuthedRequest, res: Response) => {
+  if (!hasPerm(req.authUser, 'manage_staff')) {
+    res.status(403).json({ error: 'شما مجوز حذف فیش‌های حقوق پرسنل را ندارید' });
+    return;
+  }
+  const { id } = req.params;
+  const db = loadDatabase();
+  const idx = db.payrollRecords.findIndex((p) => p.id === id);
+  if (idx === -1) {
+    res.status(404).json({ error: 'فیش حقوقی مورد نظر یافت نشد' });
+    return;
+  }
+
+  const payroll = db.payrollRecords[idx];
+  let refunded = false;
+
+  if (payroll.transactionId) {
+    const txIdx = db.transactions.findIndex((t) => t.id === payroll.transactionId);
+    if (txIdx !== -1) {
+      const tx = db.transactions[txIdx];
+      if (tx.fromAccountId) {
+        const acc = db.accounts.find((a) => a.id === tx.fromAccountId);
+        if (acc) acc.balance += tx.amount;
+      }
+      db.transactions.splice(txIdx, 1);
+      refunded = true;
+    }
+  }
+
+  db.payrollRecords.splice(idx, 1);
+  logAudit(
+    db,
+    'staff',
+    payroll.staffId,
+    'delete',
+    refunded
+      ? `حذف فیش پرداخت حقوق ${payroll.staffName} (${payroll.amount} تومان) و بازگشت مبلغ به حساب`
+      : `حذف سابقه فیش حقوق ${payroll.staffName} (تراکنش مالی قبلاً حذف شده بود)`
+  );
+  saveDatabase(db);
+  res.json({
+    success: true,
+    refunded,
+    message: refunded
+      ? 'فیش حقوقی و تراکنش مالی مرتبط حذف و مبلغ به حساب برگشت داده شد'
+      : 'سابقه فیش حقوقی حذف شد (تراکنش مالی قبلاً از دفتر تراکنش‌ها حذف شده بود)',
+  });
 });
 
 // Reports & PnL

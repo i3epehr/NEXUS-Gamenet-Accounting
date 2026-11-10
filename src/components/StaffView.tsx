@@ -36,6 +36,7 @@ interface StaffViewProps {
   onCreateStaff: (data: Partial<Staff>) => Promise<unknown>;
   onUpdateStaff?: (id: string, data: Partial<Staff>) => Promise<unknown>;
   onDeleteStaff?: (id: string) => Promise<unknown>;
+  onDeletePayroll?: (id: string) => Promise<unknown>;
   onRefresh: () => void;
 }
 
@@ -48,6 +49,7 @@ export const StaffView: React.FC<StaffViewProps> = ({
   onCreateStaff,
   onUpdateStaff,
   onDeleteStaff,
+  onDeletePayroll,
   onRefresh,
 }) => {
   // Modal states
@@ -56,13 +58,16 @@ export const StaffView: React.FC<StaffViewProps> = ({
   const [editingStaff, setEditingStaff] = useState<Staff | null>(null);
   const [staffToDelete, setStaffToDelete] = useState<{ id: string; name: string } | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [payrollToDelete, setPayrollToDelete] = useState<PayrollRecord | null>(null);
+  const [payrollDeleteLoading, setPayrollDeleteLoading] = useState(false);
 
   // Lock body scroll when any modal in StaffView is open
   useLockBodyScroll(
     payModalStaff !== null ||
     isNewStaffOpen ||
     editingStaff !== null ||
-    staffToDelete !== null
+    staffToDelete !== null ||
+    payrollToDelete !== null
   );
 
 
@@ -167,6 +172,20 @@ export const StaffView: React.FC<StaffViewProps> = ({
       console.error(err);
     } finally {
       setDeleteLoading(false);
+    }
+  };
+
+  const handleConfirmDeletePayroll = async () => {
+    if (!payrollToDelete || !onDeletePayroll) return;
+    try {
+      setPayrollDeleteLoading(true);
+      await onDeletePayroll(payrollToDelete.id);
+      setPayrollToDelete(null);
+      onRefresh();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'خطا در حذف فیش حقوقی');
+    } finally {
+      setPayrollDeleteLoading(false);
     }
   };
 
@@ -459,6 +478,7 @@ export const StaffView: React.FC<StaffViewProps> = ({
                   <th className="py-2.5 px-3">مبلغ پرداختی (تومان)</th>
                   <th className="py-2.5 px-3">تاریخ پرداخت</th>
                   <th className="py-2.5 px-3">جزئیات و یادداشت</th>
+                  {onDeletePayroll && <th className="py-2.5 px-3 text-center">عملیات</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
@@ -478,6 +498,18 @@ export const StaffView: React.FC<StaffViewProps> = ({
                       {formatJalaliReadable(p.paymentDate, false)}
                     </td>
                     <td className="py-2.5 px-3 text-slate-400 truncate max-w-xs">{p.notes || '-'}</td>
+                    {onDeletePayroll && (
+                      <td className="py-2.5 px-3 text-center">
+                        <button
+                          type="button"
+                          onClick={() => setPayrollToDelete(p)}
+                          title="حذف فیش پرداخت حقوق و بازگشت وجه به حساب"
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer inline-flex items-center justify-center"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -919,6 +951,23 @@ export const StaffView: React.FC<StaffViewProps> = ({
         isLoading={deleteLoading}
         onConfirm={handleConfirmDeleteStaff}
         onClose={() => setStaffToDelete(null)}
+      />
+
+      {/* Confirmation Modal for Payroll Record Deletion */}
+      <ConfirmModal
+        isOpen={!!payrollToDelete}
+        title="حذف فیش پرداخت حقوق"
+        message={
+          payrollToDelete
+            ? `آیا مطمئن هستید که می‌خواهید فیش پرداخت حقوق "${payrollToDelete.staffName}" به مبلغ ${formatToman(payrollToDelete.amount)} تومان را حذف کنید؟ در صورت وجود تراکنش مالی مرتبط، مبلغ به حساب "${payrollToDelete.accountName}" بازگشت داده می‌شود.`
+            : ''
+        }
+        confirmText="بله، حذف و اصلاح شود"
+        cancelText="انصراف"
+        variant="danger"
+        isLoading={payrollDeleteLoading}
+        onConfirm={handleConfirmDeletePayroll}
+        onClose={() => setPayrollToDelete(null)}
       />
     </div>
   );
