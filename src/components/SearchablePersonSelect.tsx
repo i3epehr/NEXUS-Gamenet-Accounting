@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Search, User, Wallet, Check, X, ChevronDown, Plus } from 'lucide-react';
 import { Person } from '../types/index.ts';
-import { formatToman } from '../utils/jalali.ts';
+import { formatToman, normalizeForSearch, cleanPhoneForSearch } from '../utils/jalali.ts';
 
 export interface SearchablePersonSelectProps {
   persons: Person[];
@@ -18,6 +18,10 @@ export interface SearchablePersonSelectProps {
   onManualPhoneChange?: (phone: string) => void;
   onManualSmartLaunchIdChange?: (id: string) => void;
   onQuickCreateWithId?: (idOrName: string) => void;
+  // Optional custom name for walk-in guest (مشتری آزاد)
+  allowWalkInCustomName?: boolean;
+  walkInName?: string;
+  onWalkInNameChange?: (name: string) => void;
   // Labels & placeholders
   label?: string;
   placeholder?: string;
@@ -43,6 +47,9 @@ export const SearchablePersonSelect: React.FC<SearchablePersonSelectProps> = ({
   onManualPhoneChange,
   onManualSmartLaunchIdChange,
   onQuickCreateWithId,
+  allowWalkInCustomName = false,
+  walkInName = '',
+  onWalkInNameChange,
   label,
   placeholder = 'جستجوی نام، آیدی یا شماره تماس...',
   emptyLabel = 'مشتری آزاد',
@@ -73,12 +80,34 @@ export const SearchablePersonSelect: React.FC<SearchablePersonSelectProps> = ({
     const list = filterType === 'all' ? persons : persons.filter((p) => p.type === filterType);
     if (!searchTerm.trim()) return list;
 
-    const query = searchTerm.trim().toLowerCase();
+    const rawQuery = searchTerm.trim().toLowerCase();
+    const normQuery = normalizeForSearch(searchTerm);
+    const phoneQuery = cleanPhoneForSearch(searchTerm);
+
     return list.filter((p) => {
-      const matchName = p.name.toLowerCase().includes(query);
-      const matchPhone = p.phone && p.phone.includes(query);
-      const matchSmart = p.smartLaunchId && p.smartLaunchId.toLowerCase().includes(query);
-      const matchNational = p.nationalId && p.nationalId.includes(query);
+      // 1. Name match (exact lowercase or normalized Persian/Arabic)
+      const pNameNorm = normalizeForSearch(p.name);
+      const matchName = p.name.toLowerCase().includes(rawQuery) || (normQuery && pNameNorm.includes(normQuery));
+
+      // 2. Phone match (both raw and normalized without leading 0/+98/spaces)
+      const pPhoneClean = cleanPhoneForSearch(p.phone);
+      const matchPhone =
+        (p.phone && p.phone.includes(rawQuery)) ||
+        (phoneQuery.length >= 3 && pPhoneClean.includes(phoneQuery));
+
+      // 3. SmartLaunch ID match
+      const pSmartNorm = normalizeForSearch(p.smartLaunchId);
+      const matchSmart =
+        p.smartLaunchId &&
+        (p.smartLaunchId.toLowerCase().includes(rawQuery) ||
+          (normQuery && pSmartNorm.includes(normQuery)));
+
+      // 4. National ID match
+      const matchNational =
+        p.nationalId &&
+        (p.nationalId.includes(rawQuery) ||
+          (normQuery && normalizeForSearch(p.nationalId).includes(normQuery)));
+
       return matchName || matchPhone || matchSmart || matchNational;
     });
   }, [persons, filterType, searchTerm]);
@@ -343,6 +372,19 @@ export const SearchablePersonSelect: React.FC<SearchablePersonSelectProps> = ({
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Optional Walk-in Custom Name / Label Input (مشتری آزاد با نام دلخواه) */}
+      {allowWalkInCustomName && !selectedPersonId && !isManualNew && (
+        <div className="pt-1">
+          <input
+            type="text"
+            value={walkInName || ''}
+            onChange={(e) => onWalkInNameChange && onWalkInNameChange(e.target.value)}
+            placeholder="نام یا لقب دلخواه مشتری آزاد (اختیاری - جهت نمایش کنار میز)"
+            className="w-full px-3 py-1.5 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-900/40 text-slate-900 dark:text-white text-xs placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-[#2596BE]"
+          />
         </div>
       )}
 

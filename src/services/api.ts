@@ -481,6 +481,7 @@ export const api = {
       cashOrPosAmount?: number;
       date: string;
       jalaliDate: string;
+      categoryId?: string;
       settleScope?: 'all' | 'buffet' | 'custom_amount';
       customAmount?: number;
       smartLaunchSettlement?: {

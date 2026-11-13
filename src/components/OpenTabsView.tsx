@@ -36,9 +36,15 @@ import {
   LogOut,
   Zap,
   StopCircle,
+  Landmark,
+  ChevronLeft,
+  ChevronRight,
+  Coins,
+  Layers,
 } from 'lucide-react';
 import {
   Account,
+  Category,
   GamingServiceItem,
   OpenTab,
   OpenTabItem,
@@ -58,6 +64,8 @@ interface OpenTabsViewProps {
   products: Product[];
   persons: Person[];
   accounts: Account[];
+  categories?: Category[];
+  transactions?: Transaction[];
   reservations?: Reservation[];
   gamingServices?: GamingServiceItem[];
   onCreateTab: (data: { title: string; personId?: string; customerName?: string; customerPhone?: string; notes?: string }) => Promise<unknown>;
@@ -85,6 +93,7 @@ interface OpenTabsViewProps {
       cashOrPosAmount?: number;
       date: string;
       jalaliDate: string;
+      categoryId?: string;
       settleScope?: 'all' | 'buffet' | 'custom_amount';
       customAmount?: number;
       smartLaunchSettlement?: {
@@ -127,6 +136,8 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
   products,
   persons,
   accounts,
+  categories = [],
+  transactions = [],
   reservations = [],
   gamingServices = [],
   onUpdateTab,
@@ -186,9 +197,14 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
   const [checkoutSettleScope, setCheckoutSettleScope] = useState<'all' | 'buffet' | 'custom_amount'>('all');
   const [checkoutCustomAmount, setCheckoutCustomAmount] = useState('');
   const [checkoutWalletAmount, setCheckoutWalletAmount] = useState<number>(0);
+  const [checkoutCategoryId, setCheckoutCategoryId] = useState<string>('auto');
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutWithReceipt, setCheckoutWithReceipt] = useState(false);
   const [creditLimitWarning, setCreditLimitWarning] = useState<string | null>(null);
+
+  // Closed Desks Pagination State
+  const [closedTabsPage, setClosedTabsPage] = useState<number>(1);
+  const closedTabsPageSize = 6;
 
   // Micro-loading button feedback states
   const [isStartingTab, setIsStartingTab] = useState(false);
@@ -683,6 +699,32 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
     setCheckoutAccountId(defaultPosAcc?.id || '');
     setCreditLimitWarning(null);
 
+    // Auto-detect best category based on tab title and items
+    const titleLower = (tab.title || '').toLowerCase();
+    const hasGamingTime = tab.isTimerActive || (tab.timerCalculatedCost && tab.timerCalculatedCost > 0) || tab.smartLaunchSettled;
+    const hasBuffetItems = tab.items.length > 0;
+
+    let defaultCatId = 'auto';
+    if (categories && categories.length > 0) {
+      if (hasBuffetItems && !hasGamingTime) {
+        const bCat = categories.find((c) => c.type === 'income' && (c.section === 'buffet' || c.id === 'cat_buffet_inc'));
+        if (bCat) defaultCatId = bCat.id;
+      } else if (titleLower.includes('pc') || titleLower.includes('سیستم') || titleLower.includes('کامپیوتر')) {
+        const pcCat = categories.find((c) => c.type === 'income' && (c.id === 'cat_pc' || c.name.toLowerCase().includes('pc') || c.name.includes('سیستم')));
+        if (pcCat) defaultCatId = pcCat.id;
+      } else if (titleLower.includes('vip') || titleLower.includes('وی آی پی') || titleLower.includes('اتاق')) {
+        const vipCat = categories.find((c) => c.type === 'income' && (c.id === 'cat_vip' || c.section === 'vip' || c.name.includes('vip') || c.name.includes('وی آی پی')));
+        if (vipCat) defaultCatId = vipCat.id;
+      } else if (titleLower.includes('ps4') || titleLower.includes('پی اس ۴')) {
+        const ps4Cat = categories.find((c) => c.type === 'income' && c.name.toLowerCase().includes('ps4'));
+        if (ps4Cat) defaultCatId = ps4Cat.id;
+      } else {
+        const ps5Cat = categories.find((c) => c.type === 'income' && (c.id === 'cat_ps5' || c.section === 'gaming'));
+        if (ps5Cat) defaultCatId = ps5Cat.id;
+      }
+    }
+    setCheckoutCategoryId(defaultCatId);
+
     // Check customer credit limit
     if (person && person.maxCreditLimit) {
       const potentialBalance = person.currentBalance + tab.totalAmount;
@@ -791,6 +833,7 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
         smartLaunchId: checkoutSmartLaunchId.trim() || undefined,
         settleScope: checkoutSettleScope,
         customAmount: checkoutSettleScope === 'custom_amount' ? amountToPay : undefined,
+        categoryId: checkoutCategoryId !== 'auto' ? checkoutCategoryId : undefined,
         date: new Date().toISOString(),
         jalaliDate: getJalaliDateString(),
         smartLaunchSettlement,
@@ -823,10 +866,14 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
 
     try {
       setIsSavingEdit(true);
+      const finalCustomerName = editCustomerSource === 'new' && editCustomerName.trim()
+        ? editCustomerName.trim()
+        : (!editPersonId && editCustomerName.trim() ? editCustomerName.trim() : undefined);
+
       await onUpdateTab(selectedTabForEdit.id, {
         title: editTitle.trim(),
         personId: editPersonId || undefined,
-        customerName: editCustomerSource === 'new' && editCustomerName.trim() ? editCustomerName.trim() : undefined,
+        customerName: finalCustomerName,
         customerPhone: editCustomerSource === 'new' && editCustomerPhone.trim() ? editCustomerPhone.trim() : undefined,
         notes: editNotes.trim() || undefined,
       });
@@ -1257,137 +1304,252 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
           )}
 
           {/* Closed / Previous Desks Section */}
-          {closedTabsList.length > 0 && (
-            <div className="pt-6 border-t border-slate-200 dark:border-slate-800 space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <History className="w-5 h-5 text-[#2596BE]" />
-                  <h2 className="text-base font-black text-slate-900 dark:text-white">
-                    میزها و فاکتورهای تسویه شده قبلی ({closedTabsList.length})
-                  </h2>
+          {closedTabsList.length > 0 && (() => {
+            const totalClosedTabsPages = Math.max(1, Math.ceil(closedTabsList.length / closedTabsPageSize));
+            const currentPageValid = Math.min(closedTabsPage, totalClosedTabsPages);
+            const paginatedClosedTabs = closedTabsList.slice(
+              (currentPageValid - 1) * closedTabsPageSize,
+              currentPageValid * closedTabsPageSize
+            );
+
+            return (
+              <div className="pt-6 border-t border-slate-200 dark:border-slate-800 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <History className="w-5 h-5 text-[#2596BE]" />
+                    <h2 className="text-base font-black text-slate-900 dark:text-white">
+                      میزها و فاکتورهای تسویه شده قبلی ({closedTabsList.length})
+                    </h2>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    جهت اصلاح، حذف یا بازگشایی مجدد میزهایی که قبلا تسویه شده‌اند
+                  </p>
                 </div>
-                <p className="text-xs text-slate-400">
-                  جهت اصلاح، حذف یا بازگشایی مجدد میزهایی که قبلا تسویه شده‌اند
-                </p>
-              </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {closedTabsList.map((ct) => (
-                  <div
-                    key={ct.id}
-                    className="rounded-2xl bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 p-4 space-y-3 shadow-xs hover:border-slate-300 dark:hover:border-slate-700 transition-all"
-                  >
-                    <div className="flex items-start justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
-                      <div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="w-2 h-2 rounded-full bg-slate-400 shrink-0"></span>
-                          <h3 className="font-bold text-sm text-slate-800 dark:text-slate-200">{ct.title}</h3>
-                          {ct.openedByName && (
-                            <span
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shrink-0"
-                              title={`بازگشایی میز توسط ${ct.openedByName}`}
-                            >
-                              <UserCheck className="w-2.5 h-2.5 text-[#2596BE] shrink-0" />
-                              <span>{ct.openedByName}</span>
-                            </span>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {paginatedClosedTabs.map((ct) => {
+                    const tx = transactions?.find(
+                      (t) => (ct.checkoutTransactionId && t.id === ct.checkoutTransactionId) || t.tabId === ct.id
+                    );
+                    const method = ct.checkoutPaymentMethod || tx?.paymentMethod;
+                    const accName = ct.checkoutAccountName || tx?.toAccountName;
+
+                    const isCredit = method === 'credit' || tx?.isCredit || tx?.description?.includes('[نسیه]');
+                    const isWallet = method === 'wallet';
+                    const isSplit = method === 'split';
+                    const isCash = method === 'cash';
+
+                    return (
+                      <div
+                        key={ct.id}
+                        className="rounded-2xl bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 p-4 space-y-3 shadow-xs hover:border-slate-300 dark:hover:border-slate-700 transition-all"
+                      >
+                        <div className="flex items-start justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="w-2 h-2 rounded-full bg-slate-400 shrink-0"></span>
+                              <h3 className="font-bold text-sm text-slate-800 dark:text-slate-200">{ct.title}</h3>
+                              {ct.openedByName && (
+                                <span
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shrink-0"
+                                  title={`بازگشایی میز توسط ${ct.openedByName}`}
+                                >
+                                  <UserCheck className="w-2.5 h-2.5 text-[#2596BE] shrink-0" />
+                                  <span>{ct.openedByName}</span>
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-1 font-mono">
+                              <Clock className="w-3 h-3" />
+                              <span>{formatJalaliReadable(ct.startedAt, false)}</span>
+                              {ct.personName && (
+                                <span className="text-[#2596BE] font-sans font-medium">مشتری: {ct.personName}</span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Settlement Method & Account Badge */}
+                          {ct.smartLaunchSettled ? (
+                            <div className="flex flex-col items-end gap-1 shrink-0">
+                              <span className="text-[10px] px-2 py-0.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/80 font-bold flex items-center gap-1">
+                                <Gamepad2 className="w-3 h-3" />
+                                <span>اسمارت‌لانچ</span>
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="flex flex-col items-end gap-1 shrink-0">
+                              <span
+                                className={`text-[10px] px-2 py-0.5 rounded-md font-bold flex items-center gap-1 border ${
+                                  isCredit
+                                    ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/30'
+                                    : isWallet
+                                    ? 'bg-purple-500/15 text-purple-700 dark:text-purple-400 border-purple-500/30'
+                                    : isSplit
+                                    ? 'bg-blue-500/15 text-blue-700 dark:text-blue-400 border-blue-500/30'
+                                    : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                                }`}
+                              >
+                                {isCredit ? (
+                                  <>
+                                    <Clock className="w-2.5 h-2.5" />
+                                    <span>نسیه</span>
+                                  </>
+                                ) : isWallet ? (
+                                  <>
+                                    <Wallet className="w-2.5 h-2.5" />
+                                    <span>کیف پول</span>
+                                  </>
+                                ) : isSplit ? (
+                                  <>
+                                    <Layers className="w-2.5 h-2.5" />
+                                    <span>ترکیبی</span>
+                                  </>
+                                ) : isCash ? (
+                                  <>
+                                    <Coins className="w-2.5 h-2.5" />
+                                    <span>نقدی</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <CreditCard className="w-2.5 h-2.5" />
+                                    <span>کارتخوان</span>
+                                  </>
+                                )}
+                              </span>
+                              {accName && !isCredit && (
+                                <span
+                                  className="text-[10px] text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1 font-sans"
+                                  title={`حساب / صندوق دریافتی: ${accName}`}
+                                >
+                                  <Landmark className="w-2.5 h-2.5 text-[#2596BE]" />
+                                  <span>{accName}</span>
+                                </span>
+                              )}
+                            </div>
                           )}
                         </div>
-                        <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-1 font-mono">
-                          <Clock className="w-3 h-3" />
-                          <span>{formatJalaliReadable(ct.startedAt, false)}</span>
-                          {ct.personName && (
-                            <span className="text-[#2596BE] font-sans font-medium">مشتری: {ct.personName}</span>
-                          )}
-                        </div>
-                      </div>
-                      {ct.smartLaunchSettled ? (
-                        <span className="text-[10px] px-2 py-0.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/80 font-bold flex items-center gap-1">
-                          <Gamepad2 className="w-3 h-3" />
-                          <span>اسمارت‌لانچ (خارج از دخل)</span>
-                        </span>
-                      ) : (
-                        <span className="text-[10px] px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500 font-semibold">
-                          تسویه شده
-                        </span>
-                      )}
-                    </div>
 
-                    {/* SmartLaunch Gaming Session Info */}
-                    {ct.smartLaunchSettled && (
-                      <div className="p-2 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/50 text-xs space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span className="text-slate-500 dark:text-slate-400">تایم بازی:</span>
-                          <span className="font-bold font-mono text-indigo-700 dark:text-indigo-300">
-                            {ct.smartLaunchSettled.durationMinutes} دقیقه
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-slate-500 dark:text-slate-400">مبلغ کسر در اسمارت‌لانچ:</span>
-                          <span className="font-black font-mono text-emerald-600 dark:text-emerald-400">
-                            {formatToman(ct.smartLaunchSettled.amount)} تومان
-                          </span>
-                        </div>
-                        {ct.smartLaunchSettled.smartLaunchId && (
-                          <div className="flex items-center justify-between text-[11px] pt-1 border-t border-indigo-200/50 dark:border-indigo-800/50">
-                            <span className="text-slate-400">شناسه SmartLaunch:</span>
-                            <span className="font-mono font-bold text-slate-800 dark:text-slate-200">
-                              {ct.smartLaunchSettled.smartLaunchId}
-                            </span>
+                        {/* SmartLaunch Gaming Session Info */}
+                        {ct.smartLaunchSettled && (
+                          <div className="p-2 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/50 text-xs space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-500 dark:text-slate-400">تایم بازی:</span>
+                              <span className="font-bold font-mono text-indigo-700 dark:text-indigo-300">
+                                {ct.smartLaunchSettled.durationMinutes} دقیقه
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-500 dark:text-slate-400">مبلغ کسر در اسمارت‌لانچ:</span>
+                              <span className="font-black font-mono text-emerald-600 dark:text-emerald-400">
+                                {formatToman(ct.smartLaunchSettled.amount)} تومان
+                              </span>
+                            </div>
+                            {ct.smartLaunchSettled.smartLaunchId && (
+                              <div className="flex items-center justify-between text-[11px] pt-1 border-t border-indigo-200/50 dark:border-indigo-800/50">
+                                <span className="text-slate-400">شناسه SmartLaunch:</span>
+                                <span className="font-mono font-bold text-slate-800 dark:text-slate-200">
+                                  {ct.smartLaunchSettled.smartLaunchId}
+                                </span>
+                              </div>
+                            )}
                           </div>
                         )}
-                      </div>
-                    )}
 
-                    {/* Itemized List */}
-                    <div className="space-y-1.5 text-xs max-h-36 overflow-y-auto">
-                      <span className="text-[11px] text-slate-400 font-medium block">
-                        {ct.items.length > 0 ? 'ریز اقلام ثبت‌شده:' : 'بدون سفارش بوفه'}
-                      </span>
-                      {ct.items.map((it) => (
-                        <div key={it.id} className="flex items-center justify-between py-1 px-2 rounded-lg bg-slate-50 dark:bg-slate-900/60 text-slate-700 dark:text-slate-300">
-                          <span className="truncate">{it.productName} ({it.quantity} عدد)</span>
-                          <span className="font-bold tabular-nums text-slate-900 dark:text-white shrink-0">
-                            {formatToman(it.totalPrice)}
+                        {/* Itemized List */}
+                        <div className="space-y-1.5 text-xs max-h-36 overflow-y-auto">
+                          <span className="text-[11px] text-slate-400 font-medium block">
+                            {ct.items.length > 0 ? 'ریز اقلام ثبت‌شده:' : 'بدون سفارش بوفه'}
                           </span>
+                          {ct.items.map((it) => (
+                            <div key={it.id} className="flex items-center justify-between py-1 px-2 rounded-lg bg-slate-50 dark:bg-slate-900/60 text-slate-700 dark:text-slate-300">
+                              <span className="truncate">{it.productName} ({it.quantity} عدد)</span>
+                              <span className="font-bold tabular-nums text-slate-900 dark:text-white shrink-0">
+                                {formatToman(it.totalPrice)}
+                              </span>
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
 
-                    <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
-                      <div>
-                        <span className="text-[10px] text-slate-400 block">جمع کل:</span>
-                        <span className="text-sm font-black text-slate-900 dark:text-white tabular-nums">
-                          {formatToman(ct.totalAmount)} تومان
-                        </span>
+                        <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                          <div>
+                            <span className="text-[10px] text-slate-400 block">جمع کل:</span>
+                            <span className="text-sm font-black text-slate-900 dark:text-white tabular-nums">
+                              {formatToman(ct.totalAmount)} تومان
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setTabToDelete(ct)}
+                              className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                              title="حذف سابقه میز"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                            {onReopenTab && (
+                              <button
+                                type="button"
+                                onClick={() => handleReopenClosedTab(ct.id)}
+                                disabled={reopenLoadingId === ct.id}
+                                className="px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                                title="بازگشایی مجدد میز برای ادیت و اصلاح اقلام و موجودی"
+                              >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                                <span>{reopenLoadingId === ct.id ? 'در حال بازگشایی...' : 'بازگشایی و ادیت میز'}</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-1.5">
+                    );
+                  })}
+                </div>
+
+                {/* Pagination Controls */}
+                {totalClosedTabsPages > 1 && (
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-slate-200 dark:border-slate-800 text-xs">
+                    <span className="text-slate-400">
+                      نمایش {((currentPageValid - 1) * closedTabsPageSize) + 1} تا {Math.min(currentPageValid * closedTabsPageSize, closedTabsList.length)} از {closedTabsList.length} فاکتور تسویه شده
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        disabled={currentPageValid <= 1}
+                        onClick={() => setClosedTabsPage((p) => Math.max(1, p - 1))}
+                        className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1 font-semibold"
+                      >
+                        <ChevronRight className="w-3.5 h-3.5" />
+                        <span>قبلی</span>
+                      </button>
+                      {Array.from({ length: totalClosedTabsPages }, (_, i) => i + 1).map((pg) => (
                         <button
+                          key={pg}
                           type="button"
-                          onClick={() => setTabToDelete(ct)}
-                          className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
-                          title="حذف سابقه میز"
+                          onClick={() => setClosedTabsPage(pg)}
+                          className={`w-7 h-7 rounded-lg text-xs font-bold transition-all cursor-pointer font-mono ${
+                            currentPageValid === pg
+                              ? 'bg-[#2596BE] text-white shadow-2xs'
+                              : 'border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                          }`}
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          {pg}
                         </button>
-                        {onReopenTab && (
-                          <button
-                            type="button"
-                            onClick={() => handleReopenClosedTab(ct.id)}
-                            disabled={reopenLoadingId === ct.id}
-                            className="px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                            title="بازگشایی مجدد میز برای ادیت و اصلاح اقلام و موجودی"
-                          >
-                            <RotateCcw className="w-3.5 h-3.5" />
-                            <span>{reopenLoadingId === ct.id ? 'در حال بازگشایی...' : 'بازگشایی و ادیت میز'}</span>
-                          </button>
-                        )}
-                      </div>
+                      ))}
+                      <button
+                        type="button"
+                        disabled={currentPageValid >= totalClosedTabsPages}
+                        onClick={() => setClosedTabsPage((p) => Math.min(totalClosedTabsPages, p + 1))}
+                        className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1 font-semibold"
+                      >
+                        <span>بعدی</span>
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   </div>
-                ))}
+                )}
               </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
       )}
 
@@ -2102,6 +2264,9 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
                   isManualNew={editCustomerSource === 'new'}
                   manualCustomerName={editCustomerName}
                   manualCustomerPhone={editCustomerPhone}
+                  allowWalkInCustomName={true}
+                  walkInName={editCustomerName}
+                  onWalkInNameChange={(name) => setEditCustomerName(name)}
                   onManualToggle={(isManual) => {
                     setEditCustomerSource(isManual ? 'new' : 'existing');
                     if (isManual) {
@@ -2556,6 +2721,31 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
                   )}
                 </div>
               )}
+
+              {/* Income Category Selector (رفع باگ کرایه کنسول و امکان انتخاب سرفصل) */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <Tag className="w-3.5 h-3.5 text-[#2596BE]" />
+                    <span>سرفصل درآمد این تسویه</span>
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-normal">تشخیص هوشمند یا تغییر دلخواه</span>
+                </label>
+                <select
+                  value={checkoutCategoryId}
+                  onChange={(e) => setCheckoutCategoryId(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs font-medium focus:ring-2 focus:ring-[#2596BE]"
+                >
+                  <option value="auto">تشخیص هوشمند خودکار بر اساس اقلام و نوع میز</option>
+                  {(categories || [])
+                    .filter((c) => c.type === 'income')
+                    .map((cat) => (
+                      <option key={cat.id} value={cat.id}>
+                        {cat.name} ({cat.sectionLabel || cat.section || 'عمومی'})
+                      </option>
+                    ))}
+                </select>
+              </div>
 
               <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
                 <button

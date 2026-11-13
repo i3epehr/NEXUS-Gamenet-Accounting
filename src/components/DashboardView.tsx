@@ -388,42 +388,59 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               {stats.recentTransactions.slice(0, 6).map((tx) => (
                 <tr key={tx.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors">
                   <td className="py-2.5 px-3">
-                    {tx.type === 'income' && (
-                      (tx.paymentMethod === 'credit' ||
-                      tx.isCredit ||
-                      (!tx.toAccountId && (tx.description?.includes('نسیه') || tx.description?.includes('[نسیه]')))) ? (
-                        <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 font-semibold text-[11px] bg-amber-500/10 px-1.5 py-0.5 rounded-md">
-                          نسیه (طلب)
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold">
-                          <ArrowDownLeft className="w-3.5 h-3.5" />
-                          درآمد
-                        </span>
-                      )
-                    )}
-                    {tx.type === 'expense' && (
-                      <span className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400 font-semibold">
-                        <ArrowUpRight className="w-3.5 h-3.5" />
-                        هزینه
-                      </span>
-                    )}
-                    {tx.type === 'transfer' && (
-                      <span className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 font-semibold">
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        انتقال
-                      </span>
-                    )}
-                    {tx.type === 'receivable_collection' && (
-                      <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 font-semibold">
-                        وصول طلب
-                      </span>
-                    )}
-                    {tx.type === 'debt_settlement' && (
-                      <span className="inline-flex items-center gap-1 text-purple-600 dark:text-purple-400 font-semibold">
-                        پرداخت بدهی
-                      </span>
-                    )}
+                    {(() => {
+                      const isCreditTx =
+                        tx.paymentMethod === 'credit' ||
+                        tx.isCredit ||
+                        (!tx.toAccountId && (tx.description?.includes('نسیه') || tx.description?.includes('[نسیه]')));
+
+                      if (isCreditTx) {
+                        return (
+                          <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 font-semibold text-[11px] bg-amber-500/10 px-1.5 py-0.5 rounded-md border border-amber-500/20">
+                            ثبت نسیه
+                          </span>
+                        );
+                      }
+                      if (tx.type === 'income') {
+                        return (
+                          <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold">
+                            <ArrowDownLeft className="w-3.5 h-3.5" />
+                            درآمد
+                          </span>
+                        );
+                      }
+                      if (tx.type === 'expense') {
+                        return (
+                          <span className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400 font-semibold">
+                            <ArrowUpRight className="w-3.5 h-3.5" />
+                            هزینه
+                          </span>
+                        );
+                      }
+                      if (tx.type === 'transfer') {
+                        return (
+                          <span className="inline-flex items-center gap-1 text-sky-600 dark:text-sky-400 font-semibold">
+                            <RefreshCw className="w-3.5 h-3.5" />
+                            انتقال
+                          </span>
+                        );
+                      }
+                      if (tx.type === 'receivable_collection') {
+                        return (
+                          <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold text-[11px] bg-emerald-500/10 px-1.5 py-0.5 rounded-md border border-emerald-500/20">
+                            وصول طلب
+                          </span>
+                        );
+                      }
+                      if (tx.type === 'debt_settlement') {
+                        return (
+                          <span className="inline-flex items-center gap-1 text-purple-600 dark:text-purple-400 font-semibold text-[11px]">
+                            تسویه بدهی
+                          </span>
+                        );
+                      }
+                      return null;
+                    })()}
                   </td>
                   <td className="py-2.5 px-3">
                     <span className="font-medium text-slate-800 dark:text-slate-200 block truncate max-w-[220px]">
@@ -443,15 +460,29 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     )}
                   </td>
                   <td className="py-2.5 px-3 font-bold tabular-nums">
-                    <span className={
-                      tx.type === 'income' || tx.type === 'receivable_collection'
-                        ? 'text-emerald-600 dark:text-emerald-400'
-                        : tx.type === 'expense' || tx.type === 'debt_settlement'
-                        ? 'text-rose-600 dark:text-rose-400'
-                        : 'text-slate-700 dark:text-slate-300'
-                    }>
-                      {formatToman(tx.amount)}
-                    </span>
+                    {(() => {
+                      const isCreditTx =
+                        tx.paymentMethod === 'credit' ||
+                        tx.isCredit ||
+                        (!tx.toAccountId && (tx.description?.includes('نسیه') || tx.description?.includes('[نسیه]')));
+
+                      let colorClass = 'text-slate-700 dark:text-slate-300';
+                      if (isCreditTx) {
+                        colorClass = 'text-amber-600 dark:text-amber-400';
+                      } else if (tx.type === 'income' || tx.type === 'receivable_collection') {
+                        colorClass = 'text-emerald-600 dark:text-emerald-400';
+                      } else if (tx.type === 'expense' || tx.type === 'debt_settlement') {
+                        colorClass = 'text-rose-600 dark:text-rose-400';
+                      } else if (tx.type === 'transfer') {
+                        colorClass = 'text-sky-600 dark:text-sky-400';
+                      }
+
+                      return (
+                        <span className={colorClass}>
+                          {formatToman(tx.amount)}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className="py-2.5 px-3 text-slate-500 font-mono text-[11px]">
                     {formatJalaliReadable(tx.date, true)}

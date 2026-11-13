@@ -822,6 +822,8 @@ export default function App() {
                   products={products}
                   persons={persons}
                   accounts={accounts}
+                  categories={categories}
+                  transactions={transactions}
                   reservations={reservations}
                   gamingServices={gamingServices}
                   onCreateTab={api.createTab}

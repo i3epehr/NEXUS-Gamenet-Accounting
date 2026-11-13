@@ -168,6 +168,7 @@ export const UnifiedSalesModal: React.FC<UnifiedSalesModalProps> = ({
   const [selectedAccountId, setSelectedAccountId] = useState(accounts[0]?.id || '');
   const [selectedPersonId, setSelectedPersonId] = useState('');
   const [customerSource, setCustomerSource] = useState<'existing' | 'new'>('existing');
+  const [walkInCustomName, setWalkInCustomName] = useState('');
   const [manualCustomerName, setManualCustomerName] = useState('');
   const [manualCustomerPhone, setManualCustomerPhone] = useState('');
   const [manualSmartLaunchId, setManualSmartLaunchId] = useState('');
@@ -635,11 +636,18 @@ export const UnifiedSalesModal: React.FC<UnifiedSalesModalProps> = ({
 
       if (targetTabOption === 'new' || activeTabs.length === 0) {
         const titleToUse = newTabTitle.trim() || getNextTableTitle(activeTabs);
+        const finalCustomerName =
+          customerSource === 'new'
+            ? manualCustomerName.trim() || undefined
+            : !selectedPersonId && walkInCustomName.trim()
+            ? walkInCustomName.trim()
+            : undefined;
+
         const createdTab = await onCreateTab({
           title: titleToUse,
-          personId: customerSource === 'existing' ? (selectedPersonId || undefined) : undefined,
-          customerName: customerSource === 'new' ? (manualCustomerName.trim() || undefined) : undefined,
-          customerPhone: customerSource === 'new' ? (manualCustomerPhone.trim() || undefined) : undefined,
+          personId: customerSource === 'existing' ? selectedPersonId || undefined : undefined,
+          customerName: finalCustomerName,
+          customerPhone: customerSource === 'new' ? manualCustomerPhone.trim() || undefined : undefined,
           notes: tabNotes.trim() || undefined,
         });
         targetTabId = createdTab.id;
@@ -1281,6 +1289,9 @@ export const UnifiedSalesModal: React.FC<UnifiedSalesModalProps> = ({
                     manualCustomerName={manualCustomerName}
                     manualCustomerPhone={manualCustomerPhone}
                     manualSmartLaunchId={manualSmartLaunchId}
+                    allowWalkInCustomName={true}
+                    walkInName={walkInCustomName}
+                    onWalkInNameChange={setWalkInCustomName}
                     onManualToggle={(isManual) => {
                       setCustomerSource(isManual ? 'new' : 'existing');
                       if (isManual) {

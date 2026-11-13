@@ -2006,6 +2006,50 @@ app.delete('/api/transactions/:id', (req: AuthedRequest, res: Response) => {
     }
   }
 
+  // Rollback credit debt balance if this was a credit/debt sale
+  if ((tx.isCredit || tx.paymentMethod === 'credit' || (!tx.toAccountId && tx.description?.includes('[نسیه]'))) && tx.personId) {
+    const p = db.persons.find((item) => item.id === tx.personId);
+    if (p) p.currentBalance = Math.max(0, p.currentBalance - tx.amount);
+  }
+
+  // Rollback desk tab if linked
+  if (tx.tabId || tx.id.startsWith('tx_tab_')) {
+    const linkedTab = db.openTabs.find(
+      (t) => (t.checkoutTransactionId && t.id === tx.tabId) || t.checkoutTransactionId === tx.id || t.id === tx.tabId
+    );
+    if (linkedTab) {
+      linkedTab.checkoutTransactionId = undefined;
+      linkedTab.checkoutPaymentMethod = undefined;
+      linkedTab.checkoutAccountName = undefined;
+      linkedTab.status = 'open';
+      linkedTab.closedAt = undefined;
+    }
+  }
+
+  // Restore inventory items if this transaction had deducted items
+  if (tx.receiptItems && Array.isArray(tx.receiptItems) && tx.receiptItems.length > 0) {
+    const nowIso = new Date().toISOString();
+    for (const item of tx.receiptItems) {
+      if (item.productId) {
+        const prod = db.products.find((p) => p.id === item.productId);
+        if (prod) {
+          restoreProductStock(prod, item.quantity);
+          db.inventoryLogs.unshift({
+            id: `inv_restore_tx_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            productId: prod.id,
+            productName: prod.name,
+            type: 'manual_correction',
+            quantity: item.quantity,
+            costPerUnit: prod.purchasePrice,
+            reason: `بازگشت به انبار به علت حذف تراکنش: ${tx.description}`,
+            date: nowIso,
+            createdAt: nowIso,
+          });
+        }
+      }
+    }
+  }
+
   db.transactions.splice(txIndex, 1);
   // Keep payroll history synced if the deleted transaction was a salary payment
   db.payrollRecords = db.payrollRecords.filter((p) => p.transactionId !== tx.id);
@@ -2322,6 +2366,26 @@ function deductProductStock(
   prod.stock = Math.max(0, prod.fridgeStock + prod.warehouseStock);
 
   return { deductedFromFridge: fridgeDeduct, deductedFromWarehouse: warehouseDeduct };
+}
+
+// Helper function for restoring product stock back to warehouse/fridge
+function restoreProductStock(
+  prod: Product,
+  qty: number,
+  preferredLocation: 'fridge' | 'warehouse' | 'both' = 'warehouse'
+): void {
+  if (typeof prod.warehouseStock !== 'number' || isNaN(prod.warehouseStock)) {
+    prod.warehouseStock = Math.max(0, prod.stock || 0);
+  }
+  if (typeof prod.fridgeStock !== 'number' || isNaN(prod.fridgeStock)) {
+    prod.fridgeStock = 0;
+  }
+  if (preferredLocation === 'fridge') {
+    prod.fridgeStock += qty;
+  } else {
+    prod.warehouseStock += qty;
+  }
+  prod.stock = Math.max(0, prod.fridgeStock + prod.warehouseStock);
 }
 
 // Buffet POS Immediate Sale
@@ -2863,7 +2927,9 @@ app.post('/api/tabs', (req: AuthedRequest, res: Response) => {
   const db = loadDatabase();
   let person = personId ? db.persons.find((p) => p.id === personId) : undefined;
   if (!person && customerName) {
-    person = findOrCreateCustomer(db, customerName, customerPhone);
+    if (customerPhone || req.body.smartLaunchId) {
+      person = findOrCreateCustomer(db, customerName, customerPhone, req.body.smartLaunchId);
+    }
   }
   const nowIso = new Date().toISOString();
 
@@ -2871,7 +2937,7 @@ app.post('/api/tabs', (req: AuthedRequest, res: Response) => {
     id: `tab_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
     title: title.trim(),
     personId: person?.id,
-    personName: person?.name || customerName?.trim() || undefined,
+    personName: person?.name || (customerName ? customerName.trim() : undefined),
     items: [],
     totalAmount: 0,
     notes: notes?.trim(),
@@ -2883,7 +2949,7 @@ app.post('/api/tabs', (req: AuthedRequest, res: Response) => {
   };
 
   db.openTabs.unshift(newTab);
-  logAudit(db, 'tab', newTab.id, 'create', `باز کردن حساب میز: ${newTab.title}${person ? ` برای ${person.name}` : ''}`);
+  logAudit(db, 'tab', newTab.id, 'create', `باز کردن حساب میز: ${newTab.title}${newTab.personName ? ` برای ${newTab.personName}` : ''}`);
   saveDatabase(db);
   res.status(201).json({ ...newTab, persons: db.persons });
 });
@@ -2915,7 +2981,7 @@ app.put('/api/tabs/:id', (req: Request, res: Response) => {
   if (notes !== undefined) tab.notes = notes.trim();
   if (personId !== undefined || customerName !== undefined) {
     let person = personId ? db.persons.find((p) => p.id === personId) : undefined;
-    if (!person && customerName) {
+    if (!person && customerName && customerPhone) {
       person = findOrCreateCustomer(db, customerName, customerPhone);
     }
     tab.personId = person?.id;
@@ -3022,6 +3088,7 @@ function executeTabCheckout(
     cashOrPosAmount?: number;
     date?: string;
     jalaliDate?: string;
+    categoryId?: string;
     settleScope?: 'all' | 'buffet' | 'custom_amount';
     customAmount?: number;
     smartLaunchSettlement?: {
@@ -3041,6 +3108,7 @@ function executeTabCheckout(
     smartLaunchId,
     date,
     jalaliDate,
+    categoryId,
     settleScope = 'all',
     customAmount,
     smartLaunchSettlement,
@@ -3174,9 +3242,51 @@ function executeTabCheckout(
     paymentNote = '';
   }
 
-  const categoryScope = settleScope === 'buffet' ? 'buffet' : 'gaming';
-  const categoryKeywords = settleScope === 'buffet' ? ['بوفه', 'خوراکی', 'فروش'] : ['میز', 'گیمینگ', 'کنسول', 'بازی'];
-  const incomeCat = getCategoryForSection(db, 'income', categoryScope, categoryKeywords);
+  // Intelligent Category Detection (Fixes all-categorized-as-gaming bug)
+  let incomeCat: Category | undefined;
+  if (categoryId && categoryId !== 'auto') {
+    incomeCat = db.categories.find((c) => c.id === categoryId);
+  }
+
+  if (!incomeCat) {
+    const isOnlyBuffet =
+      settleScope === 'buffet' ||
+      (tab.items.length > 0 &&
+        !tab.isTimerActive &&
+        (!tab.timerCalculatedCost || tab.timerCalculatedCost <= 0) &&
+        !smartLaunchSettlement &&
+        !tab.smartLaunchSettled);
+
+    const titleLower = (tab.title || '').toLowerCase();
+
+    if (isOnlyBuffet) {
+      incomeCat =
+        db.categories.find((c) => c.type === 'income' && (c.section === 'buffet' || c.id === 'cat_buffet_inc')) ||
+        getCategoryForSection(db, 'income', 'buffet', ['بوفه', 'خوراکی', 'فروش', 'کافه']);
+    } else if (titleLower.includes('pc') || titleLower.includes('سیستم') || titleLower.includes('کامپیوتر')) {
+      incomeCat =
+        db.categories.find((c) => c.type === 'income' && (c.id === 'cat_pc' || c.name.toLowerCase().includes('pc') || c.name.includes('سیستم'))) ||
+        db.categories.find((c) => c.type === 'income' && c.section === 'gaming');
+    } else if (titleLower.includes('vip') || titleLower.includes('وی آی پی') || titleLower.includes('اتاق')) {
+      incomeCat =
+        db.categories.find((c) => c.type === 'income' && (c.id === 'cat_vip' || c.section === 'vip' || c.name.toLowerCase().includes('vip') || c.name.includes('وی آی پی'))) ||
+        db.categories.find((c) => c.type === 'income' && c.section === 'gaming');
+    } else if (titleLower.includes('ps4') || titleLower.includes('پی اس ۴')) {
+      incomeCat =
+        db.categories.find((c) => c.type === 'income' && c.name.toLowerCase().includes('ps4')) ||
+        db.categories.find((c) => c.type === 'income' && c.id === 'cat_ps5') ||
+        db.categories.find((c) => c.type === 'income' && c.section === 'gaming');
+    } else {
+      incomeCat =
+        db.categories.find((c) => c.type === 'income' && c.id === 'cat_ps5') ||
+        db.categories.find((c) => c.type === 'income' && c.section === 'gaming') ||
+        db.categories.find((c) => c.type === 'income');
+    }
+  }
+
+  if (!incomeCat) {
+    incomeCat = getCategoryForSection(db, 'income', 'gaming', ['میز', 'گیمینگ', 'کنسول', 'بازی']);
+  }
 
   let desc = '';
   if (settleScope === 'buffet') {
@@ -3225,10 +3335,12 @@ function executeTabCheckout(
     tab.updatedAt = nowIso;
     // Tab remains open!
   } else {
-    // Close tab and link transaction id
+    // Close tab and link transaction id & settlement details
     tab.status = 'closed';
     tab.closedAt = nowIso;
     tab.checkoutTransactionId = tx.id;
+    tab.checkoutPaymentMethod = paymentMethod;
+    tab.checkoutAccountName = targetAccount?.name;
     tab.updatedAt = nowIso;
 
     // Handle SmartLaunch timer closure
@@ -3257,7 +3369,7 @@ function executeTabCheckout(
     'tab',
     tab.id,
     'checkout',
-    `${settleScope === 'buffet' ? 'تسویه بوفه' : settleScope === 'custom_amount' ? 'تسویه علی‌الحساب' : 'تسویه کامل'} میز ${tab.title}: مبلغ ${finalPayable} ت`
+    `${settleScope === 'buffet' ? 'تسویه بوفه' : settleScope === 'custom_amount' ? 'تسویه علی‌الحساب' : 'تسویه کامل'} میز ${tab.title}: مبلغ ${finalPayable} ت (سرفصل: ${incomeCat.name})`
   );
 
   return { transaction: tx, tab };
@@ -3287,7 +3399,7 @@ app.post('/api/tabs/:id/checkout', (req: Request, res: Response) => {
     return;
   }
 
-  const { transaction } = executeTabCheckout(db, tab, req.body);
+  const { transaction } = executeTabCheckout(db, tab, { ...req.body, categoryId: req.body.categoryId });
   saveDatabase(db);
 
   res.json({
@@ -3498,7 +3610,7 @@ app.post('/api/tabs/:id/reopen', (req: Request, res: Response) => {
         if (item.productId) {
           const prod = db.products.find((p) => p.id === item.productId);
           if (prod) {
-            prod.stock += item.quantity;
+            restoreProductStock(prod, item.quantity);
             db.inventoryLogs.unshift({
               id: `inv_restore_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
               productId: prod.id,
@@ -3524,7 +3636,7 @@ app.post('/api/tabs/:id/reopen', (req: Request, res: Response) => {
       if (item.productId) {
         const prod = db.products.find((p) => p.id === item.productId);
         if (prod) {
-          prod.stock += item.quantity;
+          restoreProductStock(prod, item.quantity);
           db.inventoryLogs.unshift({
             id: `inv_restore_fallback_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
             productId: prod.id,
@@ -3542,7 +3654,10 @@ app.post('/api/tabs/:id/reopen', (req: Request, res: Response) => {
   }
 
   tab.status = 'open';
+  tab.closedAt = undefined;
   tab.checkoutTransactionId = undefined;
+  tab.checkoutPaymentMethod = undefined;
+  tab.checkoutAccountName = undefined;
   tab.smartLaunchSettled = undefined;
   tab.isTimerActive = false;
   tab.timerStartedAt = undefined;
@@ -3625,7 +3740,7 @@ app.delete('/api/tabs/:id', (req: Request, res: Response) => {
       if (item.productId) {
         const prod = db.products.find((p) => p.id === item.productId);
         if (prod) {
-          prod.stock += item.quantity;
+          restoreProductStock(prod, item.quantity);
           db.inventoryLogs.unshift({
             id: `inv_restore_del_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
             productId: prod.id,

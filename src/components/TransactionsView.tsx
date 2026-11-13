@@ -14,7 +14,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { Account, Category, Person, Transaction, TransactionType } from '../types/index.ts';
-import { formatJalaliReadable, formatToman, normalizeDigits, parseTomanInput } from '../utils/jalali.ts';
+import { formatJalaliReadable, formatToman, normalizeDigits, normalizeForSearch, parseTomanInput } from '../utils/jalali.ts';
 import { ConfirmModal } from './ConfirmModal.tsx';
 import { useLockBodyScroll } from '../utils/useLockBodyScroll.ts';
 import { SearchablePersonSelect } from './SearchablePersonSelect.tsx';
@@ -73,7 +73,20 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
   const filteredTransactions = useMemo(() => {
     return transactions
       .filter((tx) => {
-        if (selectedType !== 'all' && tx.type !== selectedType) return false;
+        const isCreditTx =
+          tx.paymentMethod === 'credit' ||
+          tx.isCredit ||
+          (!tx.toAccountId && (tx.description?.includes('نسیه') || tx.description?.includes('[نسیه]')));
+
+        if (selectedType !== 'all') {
+          if (selectedType === 'credit') {
+            if (!isCreditTx) return false;
+          } else if (selectedType === 'income') {
+            if (tx.type !== 'income' || isCreditTx) return false;
+          } else if (tx.type !== selectedType) {
+            return false;
+          }
+        }
         if (selectedAccountId !== 'all') {
           if (tx.fromAccountId !== selectedAccountId && tx.toAccountId !== selectedAccountId) {
             return false;
@@ -83,12 +96,12 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
           return false;
         }
         if (search.trim()) {
-          const q = search.toLowerCase().trim();
-          const matchesDesc = tx.description?.toLowerCase().includes(q);
-          const matchesCat = tx.categoryName?.toLowerCase().includes(q);
-          const matchesPerson = tx.personName?.toLowerCase().includes(q);
-          const matchesFrom = tx.fromAccountName?.toLowerCase().includes(q);
-          const matchesTo = tx.toAccountName?.toLowerCase().includes(q);
+          const q = normalizeForSearch(search);
+          const matchesDesc = normalizeForSearch(tx.description || '').includes(q);
+          const matchesCat = normalizeForSearch(tx.categoryName || '').includes(q);
+          const matchesPerson = normalizeForSearch(tx.personName || '').includes(q);
+          const matchesFrom = normalizeForSearch(tx.fromAccountName || '').includes(q);
+          const matchesTo = normalizeForSearch(tx.toAccountName || '').includes(q);
           if (!matchesDesc && !matchesCat && !matchesPerson && !matchesFrom && !matchesTo) {
             return false;
           }
@@ -106,18 +119,24 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
 
   // Aggregate sums of filtered view
   const totals = useMemo(() => {
-    let inc = 0;
+    let cashIn = 0;
     let exp = 0;
+    let creditDebt = 0;
     filteredTransactions.forEach((tx) => {
       const isCreditTx =
         tx.paymentMethod === 'credit' ||
         tx.isCredit ||
         (!tx.toAccountId && (tx.description?.includes('نسیه') || tx.description?.includes('[نسیه]')));
 
-      if ((tx.type === 'income' && !isCreditTx) || tx.type === 'receivable_collection') inc += tx.amount;
-      if (tx.type === 'expense' || tx.type === 'debt_settlement') exp += tx.amount;
+      if (isCreditTx) {
+        creditDebt += tx.amount;
+      } else if (tx.type === 'income' || tx.type === 'receivable_collection') {
+        cashIn += tx.amount;
+      } else if (tx.type === 'expense' || tx.type === 'debt_settlement') {
+        exp += tx.amount;
+      }
     });
-    return { income: inc, expense: exp, net: inc - exp };
+    return { cashIn, expense: exp, creditDebt, net: cashIn - exp };
   }, [filteredTransactions]);
 
   // Pagination slice
@@ -229,11 +248,12 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
               className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white text-xs focus:outline-none focus:ring-2 focus:ring-[#2596BE]"
             >
               <option value="all">همه انواع تراکنش‌ها</option>
-              <option value="income">درآمدها (ورودی)</option>
+              <option value="income">درآمدها (نقدی / پوز)</option>
+              <option value="credit">نسیه / بدهی مشتریان</option>
+              <option value="receivable_collection">وصول مطالبات / تسویه حساب</option>
               <option value="expense">هزینه‌ها (خروجی)</option>
               <option value="transfer">انتقالات داخلی</option>
-              <option value="receivable_collection">وصول مطالبات</option>
-              <option value="debt_settlement">تسویه بدهی</option>
+              <option value="debt_settlement">تسویه بدهی طرف‌حساب</option>
             </select>
           </div>
 
@@ -273,17 +293,21 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
 
         {/* Filter Summary Strip */}
         <div className="flex flex-wrap items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800/60 text-xs">
-          <div className="flex items-center gap-4 text-slate-500">
+          <div className="flex flex-wrap items-center gap-3 sm:gap-4 text-slate-500">
             <span>
               تعداد نمایش: <strong className="text-slate-800 dark:text-slate-200 tabular-nums">{filteredTransactions.length}</strong>
             </span>
             <span aria-hidden="true">•</span>
             <span>
-              مجموع ورودی: <strong className="text-emerald-600 dark:text-emerald-400 tabular-nums">{formatToman(totals.income)}</strong>
+              دریافتی نقد/کارتخوان: <strong className="text-emerald-600 dark:text-emerald-400 tabular-nums">{formatToman(totals.cashIn)}</strong>
             </span>
             <span aria-hidden="true">•</span>
             <span>
-              مجموع خروجی: <strong className="text-rose-600 dark:text-rose-400 tabular-nums">{formatToman(totals.expense)}</strong>
+              نسیه / بدهی ثبت‌شده: <strong className="text-amber-600 dark:text-amber-400 tabular-nums">{formatToman(totals.creditDebt)}</strong>
+            </span>
+            <span aria-hidden="true">•</span>
+            <span>
+              مجموع هزینه‌ها: <strong className="text-rose-600 dark:text-rose-400 tabular-nums">{formatToman(totals.expense)}</strong>
             </span>
           </div>
           {(search || selectedType !== 'all' || selectedAccountId !== 'all') && (
@@ -334,42 +358,59 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                       {tx.id.replace('tx_', '#')}
                     </td>
                     <td className="py-3 px-4 whitespace-nowrap">
-                      {tx.type === 'income' && (
-                        (tx.paymentMethod === 'credit' ||
-                        tx.isCredit ||
-                        (!tx.toAccountId && (tx.description?.includes('نسیه') || tx.description?.includes('[نسیه]')))) ? (
-                          <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 font-bold bg-amber-500/10 px-2 py-0.5 rounded-lg text-xs">
-                            نسیه (طلب)
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-bold">
-                            <ArrowDownLeft className="w-3.5 h-3.5" />
-                            درآمد
-                          </span>
-                        )
-                      )}
-                      {tx.type === 'expense' && (
-                        <span className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400 font-bold">
-                          <ArrowUpRight className="w-3.5 h-3.5" />
-                          هزینه
-                        </span>
-                      )}
-                      {tx.type === 'transfer' && (
-                        <span className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 font-bold">
-                          <RefreshCw className="w-3.5 h-3.5" />
-                          انتقال
-                        </span>
-                      )}
-                      {tx.type === 'receivable_collection' && (
-                        <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 font-bold">
-                          وصول طلب
-                        </span>
-                      )}
-                      {tx.type === 'debt_settlement' && (
-                        <span className="inline-flex items-center gap-1 text-purple-600 dark:text-purple-400 font-bold">
-                          پرداخت بدهی
-                        </span>
-                      )}
+                      {(() => {
+                        const isCreditTx =
+                          tx.paymentMethod === 'credit' ||
+                          tx.isCredit ||
+                          (!tx.toAccountId && (tx.description?.includes('نسیه') || tx.description?.includes('[نسیه]')));
+
+                        if (isCreditTx) {
+                          return (
+                            <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400 font-bold bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 rounded-lg text-xs">
+                              ثبت نسیه (بدهی مشتری)
+                            </span>
+                          );
+                        }
+                        if (tx.type === 'income') {
+                          return (
+                            <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-bold">
+                              <ArrowDownLeft className="w-3.5 h-3.5" />
+                              درآمد
+                            </span>
+                          );
+                        }
+                        if (tx.type === 'expense') {
+                          return (
+                            <span className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400 font-bold">
+                              <ArrowUpRight className="w-3.5 h-3.5" />
+                              هزینه
+                            </span>
+                          );
+                        }
+                        if (tx.type === 'transfer') {
+                          return (
+                            <span className="inline-flex items-center gap-1 text-sky-600 dark:text-sky-400 font-bold">
+                              <RefreshCw className="w-3.5 h-3.5" />
+                              انتقال
+                            </span>
+                          );
+                        }
+                        if (tx.type === 'receivable_collection') {
+                          return (
+                            <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-bold bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 rounded-lg text-xs">
+                              وصول طلب (تسویه)
+                            </span>
+                          );
+                        }
+                        if (tx.type === 'debt_settlement') {
+                          return (
+                            <span className="inline-flex items-center gap-1 text-purple-600 dark:text-purple-400 font-bold">
+                              تسویه بدهی طرف‌حساب
+                            </span>
+                          );
+                        }
+                        return null;
+                      })()}
                     </td>
                     <td className="py-3 px-4 text-slate-600 dark:text-slate-400 whitespace-nowrap">
                       {tx.categoryName || '-'}
@@ -397,15 +438,29 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                       {tx.personName || '-'}
                     </td>
                     <td className="py-3 px-4 font-black tabular-nums whitespace-nowrap text-sm">
-                      <span className={
-                        tx.type === 'income' || tx.type === 'receivable_collection'
-                          ? 'text-emerald-600 dark:text-emerald-400'
-                          : tx.type === 'expense' || tx.type === 'debt_settlement'
-                          ? 'text-rose-600 dark:text-rose-400'
-                          : 'text-slate-700 dark:text-slate-300'
-                      }>
-                        {formatToman(tx.amount)}
-                      </span>
+                      {(() => {
+                        const isCreditTx =
+                          tx.paymentMethod === 'credit' ||
+                          tx.isCredit ||
+                          (!tx.toAccountId && (tx.description?.includes('نسیه') || tx.description?.includes('[نسیه]')));
+
+                        let colorClass = 'text-slate-700 dark:text-slate-300';
+                        if (isCreditTx) {
+                          colorClass = 'text-amber-600 dark:text-amber-400';
+                        } else if (tx.type === 'income' || tx.type === 'receivable_collection') {
+                          colorClass = 'text-emerald-600 dark:text-emerald-400';
+                        } else if (tx.type === 'expense' || tx.type === 'debt_settlement') {
+                          colorClass = 'text-rose-600 dark:text-rose-400';
+                        } else if (tx.type === 'transfer') {
+                          colorClass = 'text-sky-600 dark:text-sky-400';
+                        }
+
+                        return (
+                          <span className={colorClass}>
+                            {formatToman(tx.amount)}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="py-3 px-4 text-slate-500 font-mono text-[11px] whitespace-nowrap">
                       {formatJalaliReadable(tx.date, true)}
@@ -504,10 +559,10 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                     onChange={(e) => setEditType(e.target.value as TransactionType)}
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs font-bold"
                   >
-                    <option value="income">درآمد (ورودی)</option>
+                    <option value="income">درآمد (ورودی نقد/کارتخوان)</option>
                     <option value="expense">هزینه (خروجی)</option>
-                    <option value="receivable_collection">وصول طلب</option>
-                    <option value="debt_settlement">پرداخت بدهی</option>
+                    <option value="receivable_collection">وصول طلب (تسویه حساب)</option>
+                    <option value="debt_settlement">تسویه بدهی طرف‌حساب</option>
                   </select>
                 </div>
                 <div>

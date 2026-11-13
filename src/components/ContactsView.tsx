@@ -25,9 +25,14 @@ import {
   Coins,
   CreditCard,
   Loader2,
+  Landmark,
+  UserCheck,
+  Receipt,
+  Gamepad2,
+  Check,
 } from 'lucide-react';
 import { Account, GameNetSettings, OpenTab, Person, PersonType, Transaction } from '../types/index.ts';
-import { formatJalaliReadable, formatToman, getJalaliDateString, normalizeDigits, parseTomanInput } from '../utils/jalali.ts';
+import { formatJalaliReadable, formatToman, getJalaliDateString, normalizeDigits, parseTomanInput, normalizeForSearch, cleanPhoneForSearch } from '../utils/jalali.ts';
 import { ConfirmModal } from './ConfirmModal.tsx';
 import { useLockBodyScroll } from '../utils/useLockBodyScroll.ts';
 
@@ -111,6 +116,9 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
   const [walletError, setWalletError] = useState<string | null>(null);
 
   const [detailPerson, setDetailPerson] = useState<Person | null>(null);
+  const [customerHistorySearch, setCustomerHistorySearch] = useState('');
+  const [selectedHistoryTx, setSelectedHistoryTx] = useState<Transaction | null>(null);
+  const [selectedHistoryTab, setSelectedHistoryTab] = useState<OpenTab | null>(null);
   const [editingPerson, setEditingPerson] = useState<Person | null>(null);
   const [isNewContactOpen, setIsNewContactOpen] = useState(false);
 
@@ -120,7 +128,9 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
     detailPerson !== null ||
     editingPerson !== null ||
     isNewContactOpen ||
-    personToDelete !== null
+    personToDelete !== null ||
+    selectedHistoryTx !== null ||
+    selectedHistoryTab !== null
   );
 
 
@@ -160,12 +170,23 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
 
     if (search.trim()) {
       const q = search.toLowerCase().trim();
-      return (
-        p.name.toLowerCase().includes(q) ||
+      const normQ = normalizeForSearch(search);
+      const phoneQ = cleanPhoneForSearch(search);
+
+      const matchName = p.name.toLowerCase().includes(q) || (normQ && normalizeForSearch(p.name).includes(normQ));
+      const matchPhone =
         (p.phone && p.phone.includes(q)) ||
-        (p.smartLaunchId && p.smartLaunchId.toLowerCase().includes(q)) ||
-        (p.nationalId && p.nationalId.includes(q))
-      );
+        (phoneQ.length >= 3 && cleanPhoneForSearch(p.phone).includes(phoneQ));
+      const matchSmart =
+        p.smartLaunchId &&
+        (p.smartLaunchId.toLowerCase().includes(q) ||
+          (normQ && normalizeForSearch(p.smartLaunchId).includes(normQ)));
+      const matchNational =
+        p.nationalId &&
+        (p.nationalId.includes(q) ||
+          (normQ && normalizeForSearch(p.nationalId).includes(normQ)));
+
+      return matchName || matchPhone || matchSmart || matchNational;
     }
     return true;
   });
@@ -1258,86 +1279,206 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                     </div>
                   )}
 
-                  {/* Related Active/Recent Tabs */}
-                  {relatedTabs.length > 0 && (
-                    <div>
-                      <h4 className="font-bold text-xs text-slate-800 dark:text-slate-200 mb-2">
-                        میزها و دستگاه‌های باز/بسته ({relatedTabs.length}):
-                      </h4>
-                      <div className="space-y-1.5">
-                        {relatedTabs.map((t) => (
-                          <div
-                            key={t.id}
-                            className="flex items-center justify-between p-2 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs"
-                          >
-                            <span className="font-bold">{t.title}</span>
-                            <span className="text-slate-500 font-mono">
-                              {formatToman(t.totalAmount)} تومان ({t.status === 'open' ? 'درحال بازی' : 'تسویه شده'})
-                            </span>
-                          </div>
-                        ))}
-                      </div>
+                  {/* Search in Customer History */}
+                  <div className="pt-2">
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={customerHistorySearch}
+                        onChange={(e) => setCustomerHistorySearch(e.target.value)}
+                        placeholder="جستجو در سوابق، فاکتورها، شرح، مبالغ یا اقلام این مشتری..."
+                        className="w-full pl-8 pr-9 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white text-xs focus:ring-2 focus:ring-[#2596BE]/40 outline-none"
+                      />
+                      <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
+                      {customerHistorySearch && (
+                        <button
+                          type="button"
+                          onClick={() => setCustomerHistorySearch('')}
+                          className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 absolute left-2.5 top-1/2 -translate-y-1/2 cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
-                  )}
+                  </div>
+
+                  {/* Related Active/Recent Tabs */}
+                  {(() => {
+                    const histQ = customerHistorySearch.trim().toLowerCase();
+                    const histNormQ = normalizeForSearch(customerHistorySearch);
+                    const filteredRelatedTabs = relatedTabs.filter((t) => {
+                      if (!histQ) return true;
+                      const matchTitle = t.title.toLowerCase().includes(histQ) || (histNormQ && normalizeForSearch(t.title).includes(histNormQ));
+                      const matchAdmin = t.openedByName && (t.openedByName.toLowerCase().includes(histQ) || (histNormQ && normalizeForSearch(t.openedByName).includes(histNormQ)));
+                      const matchItems = t.items.some((it) => it.productName.toLowerCase().includes(histQ) || (histNormQ && normalizeForSearch(it.productName).includes(histNormQ)));
+                      return matchTitle || matchAdmin || matchItems;
+                    });
+
+                    if (filteredRelatedTabs.length === 0 && !histQ && relatedTabs.length === 0) return null;
+
+                    return (
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <h4 className="font-bold text-xs text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                            <Gamepad2 className="w-3.5 h-3.5 text-[#2596BE]" />
+                            <span>میزها و دستگاه‌های مرتبط ({filteredRelatedTabs.length}):</span>
+                          </h4>
+                          <span className="text-[10px] text-slate-400">کلیک روی هر مورد برای مشاهده جزئیات</span>
+                        </div>
+                        {filteredRelatedTabs.length === 0 ? (
+                          <div className="py-3 text-center text-xs text-slate-400 bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-800">
+                            میزی مطابق با جستجوی شما یافت نشد.
+                          </div>
+                        ) : (
+                          <div className="space-y-1.5">
+                            {filteredRelatedTabs.map((t) => (
+                              <div
+                                key={t.id}
+                                onClick={() => setSelectedHistoryTab(t)}
+                                className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs hover:border-[#2596BE] hover:bg-slate-100/70 dark:hover:bg-slate-800/60 cursor-pointer transition-all group"
+                                title="مشاهده جزئیات کامل میز، بازی و اقلام"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-slate-800 dark:text-slate-200 group-hover:text-[#2596BE] transition-colors">{t.title}</span>
+                                  {t.openedByName && (
+                                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-sky-50 dark:bg-sky-950 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 flex items-center gap-1">
+                                      <UserCheck className="w-2.5 h-2.5" />
+                                      <span>{t.openedByName}</span>
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-slate-500 font-mono">
+                                    {formatToman(t.totalAmount)} تومان ({t.status === 'open' ? 'درحال بازی' : 'تسویه شده'})
+                                  </span>
+                                  <Eye className="w-3.5 h-3.5 text-slate-400 group-hover:text-[#2596BE] transition-colors" />
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   {/* Person Transaction History */}
-                  <div>
-                    <h4 className="font-bold text-xs text-slate-800 dark:text-slate-200 mb-2">
-                      ریز گردش مالی و تراکنش‌های این شخص:
-                    </h4>
-                    {personTx.length === 0 ? (
-                      <div className="py-6 text-center text-xs text-slate-400 border border-dashed rounded-xl border-slate-200 dark:border-slate-800">
-                        گردش مالی ثبت‌شده‌ای برای این شخص وجود ندارد.
+                  {(() => {
+                    const histQ = customerHistorySearch.trim().toLowerCase();
+                    const histNormQ = normalizeForSearch(customerHistorySearch);
+                    const filteredPersonTx = personTx.filter((tx) => {
+                      if (!histQ) return true;
+                      const matchDesc = tx.description?.toLowerCase().includes(histQ) || (histNormQ && normalizeForSearch(tx.description).includes(histNormQ));
+                      const matchAmount = tx.amount.toString().includes(histQ);
+                      const matchAccount = (tx.toAccountName && tx.toAccountName.toLowerCase().includes(histQ)) || (tx.fromAccountName && tx.fromAccountName.toLowerCase().includes(histQ));
+                      const matchAdmin = tx.createdBy && (tx.createdBy.toLowerCase().includes(histQ) || (histNormQ && normalizeForSearch(tx.createdBy).includes(histNormQ)));
+                      const matchMethod = tx.paymentMethod && tx.paymentMethod.toLowerCase().includes(histQ);
+                      const matchItems = tx.receiptItems?.some((it) => it.productName.toLowerCase().includes(histQ) || (histNormQ && normalizeForSearch(it.productName).includes(histNormQ)));
+                      return matchDesc || matchAmount || matchAccount || matchAdmin || matchMethod || matchItems;
+                    });
+
+                    return (
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <h4 className="font-bold text-xs text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                            <Receipt className="w-3.5 h-3.5 text-[#2596BE]" />
+                            <span>ریز تراکنش‌ها و سوابق مالی ({filteredPersonTx.length}):</span>
+                          </h4>
+                          <span className="text-[10px] text-slate-400">برای جزئیات تسویه، ادمین و اقلام کلیک کنید</span>
+                        </div>
+                        {filteredPersonTx.length === 0 ? (
+                          <div className="py-6 text-center text-xs text-slate-400 border border-dashed rounded-xl border-slate-200 dark:border-slate-800">
+                            {histQ ? 'تراکنشی مطابق با جستجوی شما یافت نشد.' : 'گردش مالی ثبت‌شده‌ای برای این شخص وجود ندارد.'}
+                          </div>
+                        ) : (
+                          <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden max-h-60 overflow-y-auto">
+                            <table className="w-full text-right text-xs">
+                              <thead className="sticky top-0 bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 text-slate-500 font-semibold z-10">
+                                <tr>
+                                  <th className="py-2 px-3">روش / نوع</th>
+                                  <th className="py-2 px-3">شرح</th>
+                                  <th className="py-2 px-3">مبلغ (تومان)</th>
+                                  <th className="py-2 px-3">ادمین</th>
+                                  <th className="py-2 px-3">صندوق / حساب</th>
+                                  <th className="py-2 px-3">تاریخ</th>
+                                  <th className="py-2 px-2 text-center">جزئیات</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                {filteredPersonTx.map((tx) => {
+                                  const isCredit = tx.paymentMethod === 'credit' || tx.isCredit || (!tx.toAccountId && (tx.description?.includes('نسیه') || tx.description?.includes('[نسیه]')));
+                                  const isWallet = tx.paymentMethod === 'wallet';
+                                  const isSplit = tx.paymentMethod === 'split';
+
+                                  return (
+                                    <tr
+                                      key={tx.id}
+                                      onClick={() => setSelectedHistoryTx(tx)}
+                                      className="hover:bg-slate-100/70 dark:hover:bg-slate-800/60 cursor-pointer transition-colors group"
+                                      title="کلیک برای مشاهده جزئیات فاکتور، روش تسویه و اقلام"
+                                    >
+                                      <td className="py-2 px-3 whitespace-nowrap">
+                                        {isCredit ? (
+                                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-800">
+                                            نسیه (بدهی)
+                                          </span>
+                                        ) : isWallet ? (
+                                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-400 border border-purple-300 dark:border-purple-800">
+                                            کیف پول
+                                          </span>
+                                        ) : isSplit ? (
+                                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-400 border border-blue-300 dark:border-blue-800">
+                                            ترکیبی
+                                          </span>
+                                        ) : tx.type === 'income' || tx.type === 'receivable_collection' ? (
+                                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-800">
+                                            {tx.paymentMethod === 'pos' ? 'کارتخوان' : tx.paymentMethod === 'cash' ? 'نقدی' : 'تسویه / وصول'}
+                                          </span>
+                                        ) : (
+                                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-400 border border-rose-300 dark:border-rose-800">
+                                            برداشت / هزینه
+                                          </span>
+                                        )}
+                                      </td>
+                                      <td className="py-2 px-3 text-slate-800 dark:text-slate-200 truncate max-w-xs group-hover:text-[#2596BE] transition-colors">
+                                        {tx.description}
+                                      </td>
+                                      <td className="py-2 px-3 font-bold tabular-nums whitespace-nowrap">
+                                        <span className={isCredit ? 'text-amber-600 dark:text-amber-400' : tx.type === 'income' || tx.type === 'receivable_collection' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>
+                                          {formatToman(tx.amount)}
+                                        </span>
+                                      </td>
+                                      <td className="py-2 px-3 text-slate-500 whitespace-nowrap text-[11px]">
+                                        {tx.createdBy || 'اپراتور'}
+                                      </td>
+                                      <td className="py-2 px-3 text-slate-500 whitespace-nowrap">
+                                        {tx.toAccountName || tx.fromAccountName || '-'}
+                                      </td>
+                                      <td className="py-2 px-3 font-mono text-[11px] text-slate-400 whitespace-nowrap">
+                                        {formatJalaliReadable(tx.date, false)}
+                                      </td>
+                                      <td className="py-2 px-2 text-center">
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setSelectedHistoryTx(tx);
+                                          }}
+                                          className="p-1 rounded-md text-slate-400 hover:text-[#2596BE] hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+                                          title="مشاهده جزئیات فاکتور"
+                                        >
+                                          <Eye className="w-3.5 h-3.5" />
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
                       </div>
-                    ) : (
-                      <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden max-h-56 overflow-y-auto">
-                        <table className="w-full text-right text-xs">
-                          <thead className="sticky top-0 bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 text-slate-500 font-semibold z-10">
-                            <tr>
-                              <th className="py-2 px-3">نوع</th>
-                              <th className="py-2 px-3">شرح</th>
-                              <th className="py-2 px-3">مبلغ (تومان)</th>
-                              <th className="py-2 px-3">حساب</th>
-                              <th className="py-2 px-3">تاریخ</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                            {personTx.map((tx) => (
-                              <tr key={tx.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
-                                <td className="py-2 px-3">
-                                  <span
-                                    className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                                      tx.type === 'income' || tx.type === 'receivable_collection'
-                                        ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400'
-                                        : 'bg-rose-50 dark:bg-rose-950 text-rose-600 dark:text-rose-400'
-                                    }`}
-                                  >
-                                    {tx.type === 'income'
-                                      ? 'واریز'
-                                      : tx.type === 'receivable_collection'
-                                      ? 'شارژ / تسویه'
-                                      : 'برداشت / پرداخت'}
-                                  </span>
-                                </td>
-                                <td className="py-2 px-3 text-slate-800 dark:text-slate-200 truncate max-w-xs">
-                                  {tx.description}
-                                </td>
-                                <td className="py-2 px-3 font-bold tabular-nums">
-                                  {formatToman(tx.amount)}
-                                </td>
-                                <td className="py-2 px-3 text-slate-500">
-                                  {tx.toAccountName || tx.fromAccountName || '-'}
-                                </td>
-                                <td className="py-2 px-3 font-mono text-[11px] text-slate-400">
-                                  {formatJalaliReadable(tx.date, false)}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Footer */}
@@ -1366,6 +1507,312 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
             </div>
           );
         })()
+      )}
+
+      {/* POPUP MODAL: CUSTOMER HISTORY TRANSACTION DETAIL (جزئیات کامل فاکتور / تسویه / ادمین) */}
+      {selectedHistoryTx && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">
+              <div className="flex items-center gap-2">
+                <Receipt className="w-5 h-5 text-[#2596BE]" />
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                  جزئیات فاکتور و گردش حساب
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedHistoryTx(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+              {/* Highlight Amount & Settlement Method */}
+              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                <div>
+                  <span className="text-[11px] text-slate-400 block mb-1">مبلغ سند / فاکتور:</span>
+                  <span className="text-lg font-black font-mono text-slate-900 dark:text-white tabular-nums">
+                    {formatToman(selectedHistoryTx.amount)} <span className="text-xs font-normal">تومان</span>
+                  </span>
+                </div>
+                <div>
+                  {selectedHistoryTx.isCredit || selectedHistoryTx.paymentMethod === 'credit' ? (
+                    <span className="px-3 py-1 rounded-xl text-xs font-bold bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5" />
+                      <span>تسویه نسیه (بدهی ثبت شده)</span>
+                    </span>
+                  ) : selectedHistoryTx.paymentMethod === 'wallet' ? (
+                    <span className="px-3 py-1 rounded-xl text-xs font-bold bg-purple-500/15 text-purple-700 dark:text-purple-400 border border-purple-500/30 flex items-center gap-1.5">
+                      <Wallet className="w-3.5 h-3.5" />
+                      <span>کسر از کیف پول</span>
+                    </span>
+                  ) : selectedHistoryTx.paymentMethod === 'split' ? (
+                    <span className="px-3 py-1 rounded-xl text-xs font-bold bg-blue-500/15 text-blue-700 dark:text-blue-400 border border-blue-500/30 flex items-center gap-1.5">
+                      <span>ترکیبی (کیف پول + نقد/پوز)</span>
+                    </span>
+                  ) : selectedHistoryTx.paymentMethod === 'pos' ? (
+                    <span className="px-3 py-1 rounded-xl text-xs font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
+                      <CreditCard className="w-3.5 h-3.5" />
+                      <span>تسویه با کارتخوان (پوز)</span>
+                    </span>
+                  ) : selectedHistoryTx.paymentMethod === 'cash' ? (
+                    <span className="px-3 py-1 rounded-xl text-xs font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
+                      <Coins className="w-3.5 h-3.5" />
+                      <span>تسویه نقدی</span>
+                    </span>
+                  ) : (
+                    <span className="px-3 py-1 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                      {selectedHistoryTx.type === 'income' ? 'درآمد' : selectedHistoryTx.type === 'receivable_collection' ? 'وصول مطالبات' : 'سند مالی'}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Detailed Meta Grid */}
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800 space-y-1">
+                  <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                    <UserCheck className="w-3.5 h-3.5 text-[#2596BE]" />
+                    <span>ثبت توسط ادمین / اپراتور:</span>
+                  </span>
+                  <span className="font-bold text-slate-800 dark:text-slate-200 block">
+                    {selectedHistoryTx.createdBy || 'اپراتور سیستم'}
+                  </span>
+                </div>
+
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800 space-y-1">
+                  <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                    <Clock className="w-3.5 h-3.5 text-[#2596BE]" />
+                    <span>تاریخ و ساعت ثبت:</span>
+                  </span>
+                  <span className="font-mono font-semibold text-slate-800 dark:text-slate-200 block text-[11px]">
+                    {formatJalaliReadable(selectedHistoryTx.date, true)}
+                  </span>
+                </div>
+
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800 space-y-1">
+                  <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                    <Landmark className="w-3.5 h-3.5 text-[#2596BE]" />
+                    <span>صندوق / حساب دریافتی:</span>
+                  </span>
+                  <span className="font-semibold text-slate-800 dark:text-slate-200 block">
+                    {selectedHistoryTx.toAccountName || selectedHistoryTx.fromAccountName || (selectedHistoryTx.isCredit ? 'بدون واریز نقدی (نسیه)' : '-')}
+                  </span>
+                </div>
+
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800 space-y-1">
+                  <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                    <IdCard className="w-3.5 h-3.5 text-[#2596BE]" />
+                    <span>شناسه سند:</span>
+                  </span>
+                  <span className="font-mono text-slate-600 dark:text-slate-400 block text-[11px]">
+                    {selectedHistoryTx.id.replace('tx_', '#')}
+                  </span>
+                </div>
+              </div>
+
+              {/* Description */}
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800 text-xs space-y-1">
+                <span className="text-[11px] text-slate-400 block">شرح تراکنش:</span>
+                <p className="font-medium text-slate-800 dark:text-slate-200 leading-relaxed">
+                  {selectedHistoryTx.description}
+                </p>
+              </div>
+
+              {/* Receipt Items Breakdown (if available) */}
+              {selectedHistoryTx.receiptItems && selectedHistoryTx.receiptItems.length > 0 && (
+                <div className="space-y-2">
+                  <h4 className="font-bold text-xs text-slate-800 dark:text-slate-200">
+                    ریز اقلام فاکتور ({selectedHistoryTx.receiptItems.length} قلم):
+                  </h4>
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+                    <table className="w-full text-right text-xs">
+                      <thead className="bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 text-slate-500 font-semibold">
+                        <tr>
+                          <th className="py-2 px-3">کالا / عنوان</th>
+                          <th className="py-2 px-2 text-center">تعداد</th>
+                          <th className="py-2 px-3">قیمت واحد</th>
+                          <th className="py-2 px-3 text-left">مجموع</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {selectedHistoryTx.receiptItems.map((item, idx) => (
+                          <tr key={idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
+                            <td className="py-2 px-3 font-semibold text-slate-800 dark:text-slate-200">
+                              {item.productName}
+                            </td>
+                            <td className="py-2 px-2 text-center font-mono font-bold text-slate-600 dark:text-slate-300">
+                              {item.quantity}
+                            </td>
+                            <td className="py-2 px-3 font-mono text-slate-500">
+                              {formatToman(item.unitPrice)} ت
+                            </td>
+                            <td className="py-2 px-3 text-left font-mono font-bold text-slate-900 dark:text-white">
+                              {formatToman(item.totalPrice)} ت
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setSelectedHistoryTx(null)}
+                className="px-4 py-2 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold rounded-xl cursor-pointer"
+              >
+                بستن
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* POPUP MODAL: CUSTOMER HISTORY TAB DETAIL (جزئیات کامل میز / کنسول / زمان بازی) */}
+      {selectedHistoryTab && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">
+              <div className="flex items-center gap-2">
+                <Gamepad2 className="w-5 h-5 text-[#2596BE]" />
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                  جزئیات میز و سفارشات: {selectedHistoryTab.title}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedHistoryTab(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+              {/* Highlight Amount & Status */}
+              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                <div>
+                  <span className="text-[11px] text-slate-400 block mb-1">جمع فاکتور میز:</span>
+                  <span className="text-lg font-black font-mono text-slate-900 dark:text-white tabular-nums">
+                    {formatToman(selectedHistoryTab.totalAmount)} <span className="text-xs font-normal">تومان</span>
+                  </span>
+                </div>
+                <div>
+                  <span className={`px-3 py-1 rounded-xl text-xs font-bold border ${
+                    selectedHistoryTab.status === 'open'
+                      ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/30'
+                      : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                  }`}>
+                    {selectedHistoryTab.status === 'open' ? 'درحال بازی' : 'تسویه شده'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Meta Info */}
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800 space-y-1">
+                  <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                    <UserCheck className="w-3.5 h-3.5 text-[#2596BE]" />
+                    <span>ادمین بازکننده میز:</span>
+                  </span>
+                  <span className="font-bold text-slate-800 dark:text-slate-200 block">
+                    {selectedHistoryTab.openedByName || 'اپراتور سیستم'}
+                  </span>
+                </div>
+
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800 space-y-1">
+                  <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                    <Clock className="w-3.5 h-3.5 text-[#2596BE]" />
+                    <span>زمان شروع میز:</span>
+                  </span>
+                  <span className="font-mono font-semibold text-slate-800 dark:text-slate-200 block text-[11px]">
+                    {formatJalaliReadable(selectedHistoryTab.startedAt, true)}
+                  </span>
+                </div>
+              </div>
+
+              {/* SmartLaunch Info if available */}
+              {selectedHistoryTab.smartLaunchSettled && (
+                <div className="p-3 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/50 text-xs space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500 dark:text-slate-400">مدت تایم بازی:</span>
+                    <span className="font-mono font-bold text-indigo-700 dark:text-indigo-300">
+                      {selectedHistoryTab.smartLaunchSettled.durationMinutes} دقیقه
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500 dark:text-slate-400">مبلغ کسر شده در اسمارت‌لانچ:</span>
+                    <span className="font-mono font-black text-emerald-600 dark:text-emerald-400">
+                      {formatToman(selectedHistoryTab.smartLaunchSettled.amount)} تومان
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Items Breakdown */}
+              {selectedHistoryTab.items && selectedHistoryTab.items.length > 0 && (
+                <div className="space-y-2">
+                  <h4 className="font-bold text-xs text-slate-800 dark:text-slate-200">
+                    اقلام و خدمات ثبت شده روی این میز:
+                  </h4>
+                  <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+                    <table className="w-full text-right text-xs">
+                      <thead className="bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 text-slate-500 font-semibold">
+                        <tr>
+                          <th className="py-2 px-3">کالا / عنوان</th>
+                          <th className="py-2 px-2 text-center">تعداد</th>
+                          <th className="py-2 px-3">قیمت واحد</th>
+                          <th className="py-2 px-3 text-left">مجموع</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {selectedHistoryTab.items.map((it, idx) => (
+                          <tr key={idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
+                            <td className="py-2 px-3 font-semibold text-slate-800 dark:text-slate-200">
+                              {it.productName}
+                            </td>
+                            <td className="py-2 px-2 text-center font-mono font-bold text-slate-600 dark:text-slate-300">
+                              {it.quantity}
+                            </td>
+                            <td className="py-2 px-3 font-mono text-slate-500">
+                              {formatToman(it.unitPrice)} ت
+                            </td>
+                            <td className="py-2 px-3 text-left font-mono font-bold text-slate-900 dark:text-white">
+                              {formatToman(it.totalPrice)} ت
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setSelectedHistoryTab(null)}
+                className="px-4 py-2 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold rounded-xl cursor-pointer"
+              >
+                بستن
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* CREATE / EDIT CONTACT MODAL */}

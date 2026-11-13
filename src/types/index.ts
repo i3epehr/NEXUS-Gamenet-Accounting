@@ -184,6 +184,8 @@ export interface OpenTab {
   closedAt?: string;
   status: 'open' | 'closed';
   checkoutTransactionId?: string;
+  checkoutPaymentMethod?: 'cash' | 'pos' | 'credit' | 'wallet' | 'split' | string;
+  checkoutAccountName?: string;
   createdAt: string;
   updatedAt?: string;
   // فیلدهای تایمر بازی و کسر از اسمارت‌لانچ (خارج از حسابداری)

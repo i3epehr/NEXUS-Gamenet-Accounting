@@ -231,3 +231,32 @@ export function addJalaliDays(jalaliStr: string, days: number): string {
   d.setDate(d.getDate() + days);
   return getJalaliDateString(d);
 }
+
+/**
+ * Normalizes text for search by handling Persian/Arabic characters, digits, and diacritics
+ */
+export function normalizeForSearch(str: string | undefined | null): string {
+  if (!str) return '';
+  return str
+    .toString()
+    .toLowerCase()
+    .replace(/[۰-۹]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 1776 + 48))
+    .replace(/[٠-٩]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 1632 + 48))
+    .replace(/[\u064A\u0649]/g, 'ی')
+    .replace(/\u0643/g, 'ک')
+    .replace(/[\u200c\u200b\u200e\u200f]/g, '')
+    .replace(/\u0629/g, 'ه')
+    .replace(/[\u064B-\u065F\u0670]/g, '')
+    .replace(/[-_.\s]/g, '')
+    .trim();
+}
+
+/**
+ * Cleans phone numbers for comparison (strips non-digits, leading zero, +98)
+ */
+export function cleanPhoneForSearch(phone: string | undefined | null): string {
+  if (!phone) return '';
+  const digits = normalizeDigits(phone).replace(/\D/g, '');
+  return digits.replace(/^(0098|\+98|98|0)/, '');
+}
+
