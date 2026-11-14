@@ -3274,6 +3274,13 @@ function executeTabCheckout(
     paymentNote = '';
   }
 
+  // Calculate active timer on server if timer is currently running
+  let activeTimerCost = 0;
+  if (tab.isTimerActive && tab.timerStartedAt && tab.hourlyRate) {
+    const elapsedMinutes = Math.max(0, (Date.now() - new Date(tab.timerStartedAt).getTime()) / 60000);
+    activeTimerCost = Math.round((elapsedMinutes / 60) * tab.hourlyRate);
+  }
+
   // Calculate buffet portion vs gaming portion for intelligent separation
   const buffetItems = itemsToSettle.filter((it) => !!it.productId);
   const buffetItemsTotal = buffetItems.reduce((sum, it) => sum + (it.totalPrice || 0), 0);
@@ -3281,6 +3288,7 @@ function executeTabCheckout(
   const gamingItemsTotal = gamingItems.reduce((sum, it) => sum + (it.totalPrice || 0), 0);
   const gamingTimerTotal =
     (Number(tab.timerCalculatedCost) || 0) +
+    activeTimerCost +
     (smartLaunchSettlement ? Number(smartLaunchSettlement.amount) || 0 : 0);
   let rawGamingTotal = gamingItemsTotal + gamingTimerTotal;
 
@@ -3326,8 +3334,9 @@ function executeTabCheckout(
   const createdTransactions: Transaction[] = [];
 
   // Single unified transaction with intelligent mixed category badge
-  const isBoth = settleScope === 'all' && netGaming > 0 && netBuffet > 0;
-  const isBuffetOnly = (netBuffet > 0 && netGaming === 0) || settleScope === 'buffet';
+  const hasGaming = netGaming > 0 || rawGamingTotal > 0 || totalAmount > buffetItemsTotal || tab.isTimerActive || (tab.hourlyRate && tab.hourlyRate > 0);
+  const isBoth = settleScope === 'all' && buffetItemsTotal > 0 && hasGaming;
+  const isBuffetOnly = !isBoth && ((netBuffet > 0 && !hasGaming) || settleScope === 'buffet');
 
   let chosenCatId = '';
   let chosenCatName = '';
@@ -3342,20 +3351,19 @@ function executeTabCheckout(
     chosenCatName = gamingCat?.name || 'کرایه دستگاه';
   }
 
-  // Clean, consistent, and concise description
+  // Clean, consistent, and concise description without duplicating person or payment method
   let desc = '';
-  const personDesc = effectivePersonName ? ` (${effectivePersonName})` : '';
   const depositDesc = depositDeduction > 0 ? ` [کسر بیعانه: ${depositDeduction.toLocaleString('fa-IR')} ت]` : '';
   const itemsDesc = itemsToSettle.length > 0
     ? ` [${itemsToSettle.map((i) => `${i.productName} × ${i.quantity}`).join('، ')}]`
     : '';
 
   if (settleScope === 'buffet') {
-    desc = `تسویه بوفه ${tab.title}${personDesc}${itemsDesc}${depositDesc}${paymentNote}`;
+    desc = `تسویه بوفه ${tab.title}${itemsDesc}${depositDesc}`;
   } else if (settleScope === 'custom_amount') {
-    desc = `تسویه علی‌الحساب ${tab.title}${personDesc} [مبلغ: ${finalPayable.toLocaleString('fa-IR')} ت]${paymentNote}`;
+    desc = `تسویه علی‌الحساب ${tab.title} [مبلغ: ${finalPayable.toLocaleString('fa-IR')} ت]`;
   } else {
-    desc = `تسویه کامل ${tab.title}${personDesc}${itemsDesc}${depositDesc}${paymentNote}`;
+    desc = `تسویه کامل ${tab.title}${itemsDesc}${depositDesc}`;
   }
 
   const tx: Transaction = {
@@ -3398,7 +3406,7 @@ function executeTabCheckout(
     tab.status = 'closed';
     tab.closedAt = nowIso;
     tab.checkoutTransactionId = tx.id;
-    tab.checkoutPaymentMethod = paymentMethod;
+    tab.checkoutPaymentMethod = paymentMethod || (targetAccount?.type === 'cash' ? 'cash' : 'pos');
     tab.checkoutAccountName = targetAccount?.name;
     tab.updatedAt = nowIso;
 
@@ -3636,12 +3644,11 @@ app.post('/api/tabs/:id/reopen', (req: Request, res: Response) => {
     return;
   }
 
-  // 1. Find all previous checkout transactions linked to this desk (supports split gaming + buffet txs)
+  // 1. Find previous checkout transaction(s) strictly linked to this desk
   const relatedTxs = db.transactions.filter(
     (t) =>
       (tab.checkoutTransactionId && t.id === tab.checkoutTransactionId) ||
-      t.tabId === tab.id ||
-      (t.id.startsWith('tx_tab_') && t.description.includes(tab.title))
+      (t.tabId && t.tabId === tab.id)
   );
 
   let restoredAnyStock = false;
@@ -3657,7 +3664,7 @@ app.post('/api/tabs/:id/reopen', (req: Request, res: Response) => {
       }
 
       // Revert customer credit balance if credit
-      if (oldTx.personId && (oldTx.description.includes('[نسیه]') || !oldTx.toAccountId)) {
+      if (oldTx.personId && (oldTx.isCredit || oldTx.paymentMethod === 'credit' || oldTx.description?.includes('[نسیه]') || !oldTx.toAccountId)) {
         const person = db.persons.find((p) => p.id === oldTx.personId);
         if (person) {
           person.currentBalance = Math.max(0, person.currentBalance - oldTx.amount);
@@ -3783,10 +3790,7 @@ app.delete('/api/tabs/:id', (req: Request, res: Response) => {
   const relatedTxs = db.transactions.filter(
     (t) =>
       (deleted.checkoutTransactionId && t.id === deleted.checkoutTransactionId) ||
-      t.tabId === deleted.id ||
-      (t.id.startsWith('tx_tab_') && t.description.includes(deleted.title)) ||
-      (t.id.startsWith('tx_pos_') && t.description.includes(deleted.title)) ||
-      (t.id.startsWith('tx_unified_') && (t.tabId === deleted.id || t.description.includes(deleted.title)))
+      (t.tabId && t.tabId === deleted.id)
   );
 
   let revertedTxAmount = 0;
@@ -3807,9 +3811,9 @@ app.delete('/api/tabs/:id', (req: Request, res: Response) => {
     if (oldTx.personId) {
       const person = db.persons.find((p) => p.id === oldTx.personId);
       if (person) {
-        if (oldTx.description.includes('[نسیه]') || !oldTx.toAccountId) {
+        if (oldTx.isCredit || oldTx.paymentMethod === 'credit' || oldTx.description?.includes('[نسیه]') || !oldTx.toAccountId) {
           person.currentBalance = Math.max(0, person.currentBalance - oldTx.amount);
-        } else if (oldTx.description.includes('[کیف پول]') || oldTx.description.includes('کیف پول')) {
+        } else if (oldTx.paymentMethod === 'wallet' || oldTx.description?.includes('[کیف پول]') || oldTx.description?.includes('کیف پول')) {
           person.currentBalance -= oldTx.amount;
         }
       }
@@ -4280,7 +4284,7 @@ app.post('/api/contacts/:id/wallet', (req: Request, res: Response) => {
       toAccountName: account.name,
       personId: person.id,
       personName: person.name,
-      description: description || `شارژ کیف پول ${person.name} ${person.smartLaunchId ? `[آیدی SmartLaunch: ${person.smartLaunchId}]` : ''}`,
+      description: description || 'شارژ کیف پول',
       createdBy: 'مدیر',
       createdAt: nowIso,
     };
@@ -4309,7 +4313,7 @@ app.post('/api/contacts/:id/wallet', (req: Request, res: Response) => {
       fromAccountName: account?.name,
       personId: person.id,
       personName: person.name,
-      description: description || `کسر از حساب / برداشت از کیف پول ${person.name}`,
+      description: description || 'برداشت / کسر از کیف پول',
       createdBy: 'مدیر',
       createdAt: nowIso,
     };
@@ -4767,10 +4771,9 @@ app.post('/api/checkout/unified', (req: AuthedRequest, res: Response) => {
     ? ` [${items.map((it) => `${it.name} × ${it.quantity}`).join('، ')}]`
     : '';
 
-  const personDesc = effectivePersonName ? ` (${effectivePersonName})` : '';
   const txDesc = description && description.trim()
-    ? `${description.trim()}${paymentNote}`
-    : `فروش${personDesc}${itemsDesc}${paymentNote}`;
+    ? description.trim()
+    : `فروش بوفه و کافه${itemsDesc}`;
 
   const tx: Transaction = {
     id: `tx_unified_${Date.now()}`,
@@ -4805,7 +4808,7 @@ app.post('/api/checkout/unified', (req: AuthedRequest, res: Response) => {
       existing.status = 'closed';
       existing.closedAt = date || nowIso;
       existing.checkoutTransactionId = primaryTxId;
-      existing.checkoutPaymentMethod = paymentMethod;
+      existing.checkoutPaymentMethod = paymentMethod || (targetAccount?.type === 'cash' ? 'cash' : 'pos');
       existing.checkoutAccountName = targetAccount?.name;
       existing.totalAmount += finalAmount;
       existing.paidAmount = existing.totalAmount;
@@ -4875,7 +4878,7 @@ app.post('/api/checkout/unified', (req: AuthedRequest, res: Response) => {
       discount: 0,
       finalAmount: finalAmount,
       checkoutTransactionId: primaryTxId,
-      checkoutPaymentMethod: paymentMethod,
+      checkoutPaymentMethod: paymentMethod || (targetAccount?.type === 'cash' ? 'cash' : 'pos'),
       checkoutAccountName: targetAccount?.name,
       openedByUserId: req.authUser?.id,
       openedByName: req.authUser?.fullName || req.authUser?.username,
@@ -5446,6 +5449,31 @@ async function startServer() {
   loadSessionsFromFile();
   try {
     const initialDb = loadDatabase();
+    // Backfill missing checkoutPaymentMethod or paymentMethod on closed tabs / transactions
+    let dbMigrated = false;
+    for (const tab of initialDb.openTabs) {
+      if (tab.status === 'closed' && !tab.checkoutPaymentMethod) {
+        const accLower = (tab.checkoutAccountName || '').toLowerCase();
+        tab.checkoutPaymentMethod = (accLower.includes('صندوق') || accLower.includes('نقد') || accLower.includes('دخل')) ? 'cash' : 'pos';
+        dbMigrated = true;
+      }
+    }
+    for (const tx of initialDb.transactions) {
+      if (!tx.paymentMethod && tx.type === 'income') {
+        const accLower = (tx.toAccountName || '').toLowerCase();
+        if (accLower.includes('صندوق') || accLower.includes('نقد') || accLower.includes('دخل')) {
+          tx.paymentMethod = 'cash';
+        } else if (tx.isCredit) {
+          tx.paymentMethod = 'credit';
+        } else {
+          tx.paymentMethod = 'pos';
+        }
+        dbMigrated = true;
+      }
+    }
+    if (dbMigrated) {
+      saveDatabase(initialDb);
+    }
     console.log(`[Database] Initialized successfully. Loaded ${initialDb.users.length} users, ${initialDb.transactions.length} transactions, ${initialDb.accounts.length} accounts. Active sessions: ${activeSessions.size}`);
   } catch (dbErr) {
     console.error('[Database] Failed eager database startup verification:', dbErr);

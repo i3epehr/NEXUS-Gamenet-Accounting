@@ -30,7 +30,7 @@ export function getTransactionMeta(tx: Transaction): TransactionMeta {
 
   if (isCredit) {
     return {
-      label: 'ثبت نسیه (بدهی مشتری)',
+      label: 'ثبت نسیه',
       badgeClass: 'bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30',
       amountClass: 'text-amber-600 dark:text-amber-400',
       kind: 'credit',
@@ -70,7 +70,7 @@ export function getTransactionMeta(tx: Transaction): TransactionMeta {
   // 4. Settling customer debt / collection of receivable
   if (tx.type === 'receivable_collection') {
     return {
-      label: 'وصول طلب (تسویه نسیه)',
+      label: 'تسویه نسیه',
       badgeClass: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30',
       amountClass: 'text-emerald-600 dark:text-emerald-400',
       kind: 'receivable_collection',
@@ -90,7 +90,7 @@ export function getTransactionMeta(tx: Transaction): TransactionMeta {
   // 6. Regular Income
   if (tx.type === 'income') {
     return {
-      label: 'درآمد (فروش / بازی)',
+      label: 'درآمد',
       badgeClass: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30',
       amountClass: 'text-emerald-600 dark:text-emerald-400',
       kind: 'income',
@@ -128,7 +128,8 @@ export function getTransactionMeta(tx: Transaction): TransactionMeta {
 export function getPaymentMethodBadge(
   method?: string,
   isCredit?: boolean,
-  isSmartLaunch?: boolean
+  isSmartLaunch?: boolean,
+  accountName?: string
 ): { label: string; badgeClass: string } {
   if (isSmartLaunch) {
     return {
@@ -172,8 +173,34 @@ export function getPaymentMethodBadge(
       badgeClass: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30',
     };
   }
+
+  // When paymentMethod was not explicitly stored, detect via account name
+  const accLower = (accountName || '').toLowerCase();
+  if (accLower.includes('صندوق') || accLower.includes('نقد') || accLower.includes('دخل')) {
+    return {
+      label: 'نقدی',
+      badgeClass: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30',
+    };
+  }
+
+  // Default to کارتخوان (standard POS reader in gamenets)
   return {
-    label: 'نقدی / کارتخوان',
+    label: 'کارتخوان',
     badgeClass: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30',
   };
+}
+
+/**
+ * Checks whether a transaction contains both gaming rental/time and buffet items.
+ */
+export function isMixedGamingBuffet(tx: { categoryName?: string; tabId?: string; receiptItems?: unknown[] }): boolean {
+  if (!tx) return false;
+  const cat = tx.categoryName || '';
+  if (cat.includes('+') || (cat.includes('بوفه') && (cat.includes('کرایه') || cat.includes('کنسول') || cat.includes('گیم‌نت')))) {
+    return true;
+  }
+  if (tx.tabId && tx.receiptItems && Array.isArray(tx.receiptItems) && tx.receiptItems.length > 0) {
+    return true;
+  }
+  return false;
 }

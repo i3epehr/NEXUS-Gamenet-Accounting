@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { Account, Category, Person, Transaction, TransactionType } from '../types/index.ts';
 import { formatJalaliReadable, formatToman, normalizeDigits, normalizeForSearch, parseTomanInput } from '../utils/jalali.ts';
-import { getTransactionMeta } from '../utils/transactions.ts';
+import { getTransactionMeta, isMixedGamingBuffet } from '../utils/transactions.ts';
 import { ConfirmModal } from './ConfirmModal.tsx';
 import { useLockBodyScroll } from '../utils/useLockBodyScroll.ts';
 import { SearchablePersonSelect } from './SearchablePersonSelect.tsx';
@@ -137,7 +137,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
         creditDebt += tx.amount;
       } else if (meta.kind === 'income' || meta.kind === 'receivable_collection' || meta.kind === 'wallet_charge') {
         cashIn += tx.amount;
-      } else if (meta.kind === 'expense' || meta.kind === 'debt_settlement' || meta.kind === 'wallet_deduct') {
+      } else if (meta.kind === 'expense') {
         exp += tx.amount;
       }
     });
@@ -256,7 +256,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
               <option value="income">درآمدها (نقدی / کارتخوان)</option>
               <option value="credit">نسیه / بدهی مشتریان</option>
               <option value="wallet_charge">شارژ کیف پول</option>
-              <option value="receivable_collection">وصول مطالبات / تسویه نسیه</option>
+              <option value="receivable_collection">تسویه نسیه / بدهی مشتری</option>
               <option value="expense">هزینه‌ها (خروجی)</option>
               <option value="transfer">انتقالات داخلی</option>
               <option value="wallet_deduct">کسر از کیف پول / عودت وجه</option>
@@ -375,7 +375,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                       })()}
                     </td>
                     <td className="py-3 px-4 text-slate-600 dark:text-slate-400 whitespace-nowrap">
-                      {tx.categoryName?.includes('+') ? (
+                      {isMixedGamingBuffet(tx) ? (
                         <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-bold bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-500/20">
                           <span>🎮 کرایه</span>
                           <span className="text-slate-400 font-normal">+</span>
@@ -516,7 +516,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                   >
                     <option value="income">درآمد (ورودی نقد/کارتخوان)</option>
                     <option value="expense">هزینه (خروجی)</option>
-                    <option value="receivable_collection">وصول طلب (تسویه حساب)</option>
+                    <option value="receivable_collection">تسویه نسیه مشتری</option>
                     <option value="debt_settlement">تسویه بدهی طرف‌حساب</option>
                   </select>
                 </div>

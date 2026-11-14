@@ -1559,7 +1559,7 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
                             const accName = ct.checkoutAccountName || tx?.toAccountName;
                             const isSmartLaunch = !!ct.smartLaunchSettled;
                             const isCredit = method === 'credit' || tx?.isCredit || tx?.description?.includes('[نسیه]');
-                            const methodBadge = getPaymentMethodBadge(method, isCredit, isSmartLaunch);
+                            const methodBadge = getPaymentMethodBadge(method, isCredit, isSmartLaunch, accName);
 
                             return (
                               <tr key={ct.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors">
@@ -1658,7 +1658,7 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
 
                       const isSmartLaunch = !!ct.smartLaunchSettled;
                       const isCredit = method === 'credit' || tx?.isCredit || tx?.description?.includes('[نسیه]');
-                      const methodBadge = getPaymentMethodBadge(method, isCredit, isSmartLaunch);
+                      const methodBadge = getPaymentMethodBadge(method, isCredit, isSmartLaunch, accName);
 
                       return (
                         <div

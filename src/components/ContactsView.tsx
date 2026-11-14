@@ -33,7 +33,7 @@ import {
 } from 'lucide-react';
 import { Account, GameNetSettings, OpenTab, Person, PersonType, Transaction } from '../types/index.ts';
 import { formatJalaliReadable, formatToman, getJalaliDateString, normalizeDigits, parseTomanInput, normalizeForSearch, cleanPhoneForSearch } from '../utils/jalali.ts';
-import { getTransactionMeta, getPaymentMethodBadge } from '../utils/transactions.ts';
+import { getTransactionMeta, getPaymentMethodBadge, isMixedGamingBuffet } from '../utils/transactions.ts';
 import { ConfirmModal } from './ConfirmModal.tsx';
 import { useLockBodyScroll } from '../utils/useLockBodyScroll.ts';
 
@@ -1357,7 +1357,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                             <option value="income">درآمد و فاکتورها</option>
                             <option value="credit">نسیه و بدهی ثبت‌شده</option>
                             <option value="wallet">شارژ و کسر کیف پول</option>
-                            <option value="collection">تسویه بدهی و وصول طلب</option>
+                            <option value="collection">تسویه بدهی / نسیه</option>
                           </select>
                         </div>
                       </div>
@@ -1452,7 +1452,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                           <div className="space-y-2 max-h-[380px] overflow-y-auto pr-0.5">
                             {filteredPersonTx.map((tx) => {
                               const meta = getTransactionMeta(tx);
-                              const methodBadge = getPaymentMethodBadge(tx.paymentMethod, tx.isCredit);
+                              const methodBadge = getPaymentMethodBadge(tx.paymentMethod, tx.isCredit, false, tx.toAccountName);
                               const shortTitle = (() => {
                                 if (tx.tabId || tx.id.startsWith('tx_tab_')) {
                                   const m = tx.description?.match(/تسویه\s+(?:کامل\s+|بوفه\s+|علی‌الحساب\s+)?(میز\s+[^\(\[\-\s]+|اتاق\s+[^\(\[\-\s]+|سیستم\s+[^\(\[\-\s]+|VIP[^\(\[\-\s]*)/i);
@@ -1461,7 +1461,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                                 if (tx.receiptItems && tx.receiptItems.length > 0) return 'خرید بوفه و کافه';
                                 if (meta.kind === 'wallet_charge') return 'شارژ کیف پول';
                                 if (meta.kind === 'wallet_deduct') return 'کسر از حساب';
-                                if (meta.kind === 'receivable_collection') return 'وصول طلب (تسویه نسیه)';
+                                if (meta.kind === 'receivable_collection') return 'تسویه نسیه';
                                 if (meta.kind === 'debt_settlement') return 'تسویه بدهی';
                                 if (meta.kind === 'credit') return 'ثبت نسیه';
                                 if (tx.type === 'expense') return `هزینه: ${tx.categoryName || 'متفرقه'}`;
@@ -1633,7 +1633,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                     </span>
                   ) : (
                     <span className="px-3 py-1 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-                      {selectedHistoryTx.type === 'income' ? 'درآمد' : selectedHistoryTx.type === 'receivable_collection' ? 'وصول مطالبات' : 'سند مالی'}
+                      {getTransactionMeta(selectedHistoryTx).label}
                     </span>
                   )}
                 </div>
@@ -1679,6 +1679,24 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                   <span className="font-mono text-slate-600 dark:text-slate-400 block text-[11px]">
                     {selectedHistoryTx.id.replace('tx_', '#')}
                   </span>
+                </div>
+
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800 space-y-1 sm:col-span-2">
+                  <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                    <Gamepad2 className="w-3.5 h-3.5 text-[#2596BE]" />
+                    <span>سرفصل / دسته‌بندی:</span>
+                  </span>
+                  <div className="font-semibold text-slate-800 dark:text-slate-200">
+                    {isMixedGamingBuffet(selectedHistoryTx) ? (
+                      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-bold bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-500/20">
+                        <span>🎮 کرایه کنسول</span>
+                        <span className="text-slate-400 font-normal">+</span>
+                        <span className="text-amber-600 dark:text-amber-400">☕ بوفه</span>
+                      </span>
+                    ) : (
+                      selectedHistoryTx.categoryName || '-'
+                    )}
+                  </div>
                 </div>
               </div>
 

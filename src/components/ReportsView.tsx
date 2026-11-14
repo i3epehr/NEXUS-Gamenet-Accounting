@@ -23,6 +23,7 @@ import {
   addJalaliDays,
 } from '../utils/jalali.ts';
 import { useLockBodyScroll } from '../utils/useLockBodyScroll.ts';
+import { getTransactionMeta, isMixedGamingBuffet } from '../utils/transactions.ts';
 
 interface ReportsViewProps {
   transactions: Transaction[];
@@ -115,24 +116,23 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ transactions, settings
     return searchedTx.slice(start, start + pageSize);
   }, [searchedTx, tablePage, pageSize]);
 
-  // Financial aggregates
-  const { totalIncome, totalExpense, netProfit, incomeByCat, expenseByCat } = useMemo(() => {
+  // Financial aggregates synchronized with ledger metadata
+  const { totalIncome, totalExpense, totalCredit, netProfit, incomeByCat, expenseByCat } = useMemo(() => {
     let inc = 0;
     let exp = 0;
+    let credit = 0;
     const incMap: Record<string, number> = {};
     const expMap: Record<string, number> = {};
 
     filteredTx.forEach((t) => {
-      const isCreditTx =
-        t.paymentMethod === 'credit' ||
-        t.isCredit ||
-        (!t.toAccountId && (t.description?.includes('نسیه') || t.description?.includes('[نسیه]')));
-
-      if ((t.type === 'income' && !isCreditTx) || t.type === 'receivable_collection') {
+      const meta = getTransactionMeta(t);
+      if (meta.kind === 'credit') {
+        credit += t.amount;
+      } else if (meta.kind === 'income' || meta.kind === 'receivable_collection' || meta.kind === 'wallet_charge') {
         inc += t.amount;
-        const name = t.categoryName || 'درآمد متفرقه';
+        const name = isMixedGamingBuffet(t) ? 'کرایه کنسول + بوفه' : (t.categoryName || 'درآمد گیم‌نت');
         incMap[name] = (incMap[name] || 0) + t.amount;
-      } else if (t.type === 'expense' || t.type === 'debt_settlement') {
+      } else if (meta.kind === 'expense') {
         exp += t.amount;
         const name = t.categoryName || 'هزینه متفرقه';
         expMap[name] = (expMap[name] || 0) + t.amount;
@@ -142,6 +142,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ transactions, settings
     return {
       totalIncome: inc,
       totalExpense: exp,
+      totalCredit: credit,
       netProfit: inc - exp,
       incomeByCat: Object.entries(incMap).map(([name, amount]) => ({
         name,
@@ -349,9 +350,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ transactions, settings
       {/* Screen Report Overview Cards */}
       <div className="space-y-6 no-print">
         {/* Key Summary Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="p-5 rounded-2xl bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 shadow-xs space-y-2">
-            <span className="text-xs text-slate-500 dark:text-slate-400 block font-medium">مجموع درآمد دوره</span>
+            <span className="text-xs text-slate-500 dark:text-slate-400 block font-medium">درآمد وصول‌شده (نقد/پوز)</span>
             <span className="text-2xl font-black text-emerald-600 dark:text-emerald-400 tabular-nums block">
               {formatToman(totalIncome)}
               <span className="text-xs font-normal text-slate-400 mr-1.5">تومان</span>
@@ -361,6 +362,13 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ transactions, settings
             <span className="text-xs text-slate-500 dark:text-slate-400 block font-medium">مجموع هزینه‌های دوره</span>
             <span className="text-2xl font-black text-rose-600 dark:text-rose-400 tabular-nums block">
               {formatToman(totalExpense)}
+              <span className="text-xs font-normal text-slate-400 mr-1.5">تومان</span>
+            </span>
+          </div>
+          <div className="p-5 rounded-2xl bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 shadow-xs space-y-2">
+            <span className="text-xs text-slate-500 dark:text-slate-400 block font-medium">مطالبات نسیه دوره</span>
+            <span className="text-2xl font-black text-amber-600 dark:text-amber-400 tabular-nums block">
+              {formatToman(totalCredit)}
               <span className="text-xs font-normal text-slate-400 mr-1.5">تومان</span>
             </span>
           </div>
@@ -515,31 +523,40 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ transactions, settings
                     </td>
                   </tr>
                 ) : (
-                  paginatedTx.map((t) => (
-                    <tr key={t.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors">
-                      <td className="py-3 px-3 font-mono text-[11px] text-slate-400">
-                        {t.id.replace('tx_', '#')}
-                      </td>
-                      <td className="py-3 px-3 font-semibold">
-                        {t.type === 'income' ? (
-                          <span className="text-emerald-600 dark:text-emerald-400 font-bold">درآمد</span>
-                        ) : t.type === 'expense' ? (
-                          <span className="text-rose-600 dark:text-rose-400 font-bold">هزینه</span>
-                        ) : (
-                          <span className="text-blue-600 dark:text-blue-400 font-bold">انتقال</span>
-                        )}
-                      </td>
-                      <td className="py-3 px-3 text-slate-600 dark:text-slate-300 font-medium">{t.categoryName || '-'}</td>
-                      <td className="py-3 px-3 font-medium text-slate-800 dark:text-slate-200 max-w-sm truncate">{t.description}</td>
-                      <td className="py-3 px-3 font-bold tabular-nums text-slate-900 dark:text-white">
-                        {formatToman(t.amount)}
-                      </td>
-                      <td className="py-3 px-3 text-slate-600 dark:text-slate-300">{t.toAccountName || t.fromAccountName || '-'}</td>
-                      <td className="py-3 px-3 font-mono text-[11px] text-slate-500 whitespace-nowrap">
-                        {formatJalaliReadable(t.date, false)}
-                      </td>
-                    </tr>
-                  ))
+                  paginatedTx.map((t) => {
+                    const meta = getTransactionMeta(t);
+                    return (
+                      <tr key={t.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors">
+                        <td className="py-3 px-3 font-mono text-[11px] text-slate-400">
+                          {t.id.replace('tx_', '#')}
+                        </td>
+                        <td className="py-3 px-3">
+                          <span className={`inline-flex items-center gap-1 font-bold px-2 py-0.5 rounded-lg text-xs border ${meta.badgeClass}`}>
+                            {meta.label}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 text-slate-600 dark:text-slate-300 font-medium whitespace-nowrap">
+                          {isMixedGamingBuffet(t) ? (
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-bold bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-500/20">
+                              <span>🎮 کرایه</span>
+                              <span className="text-slate-400 font-normal">+</span>
+                              <span className="text-amber-600 dark:text-amber-400">☕ بوفه</span>
+                            </span>
+                          ) : (
+                            t.categoryName || '-'
+                          )}
+                        </td>
+                        <td className="py-3 px-3 font-medium text-slate-800 dark:text-slate-200 max-w-sm truncate">{t.description}</td>
+                        <td className={`py-3 px-3 font-bold tabular-nums ${meta.amountClass}`}>
+                          {formatToman(t.amount)}
+                        </td>
+                        <td className="py-3 px-3 text-slate-600 dark:text-slate-300">{t.toAccountName || t.fromAccountName || '-'}</td>
+                        <td className="py-3 px-3 font-mono text-[11px] text-slate-500 whitespace-nowrap">
+                          {formatJalaliReadable(t.date, false)}
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -665,22 +682,30 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ transactions, settings
                 </div>
 
                 {/* Key Balances Grid */}
-                <div className="grid grid-cols-3 gap-3">
+                <div className={`grid ${totalCredit > 0 ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3'} gap-3`}>
                   <div className="p-3.5 rounded-xl border border-emerald-300 bg-emerald-50 text-center">
-                    <span className="text-[11px] text-emerald-800 font-bold block">مجموع درآمد دوره:</span>
-                    <span className="text-base font-black text-emerald-700 tabular-nums">
+                    <span className="text-[11px] text-emerald-800 font-bold block">درآمد وصول‌شده:</span>
+                    <span className="text-sm sm:text-base font-black text-emerald-700 tabular-nums">
                       {formatToman(totalIncome)} تومان
                     </span>
                   </div>
                   <div className="p-3.5 rounded-xl border border-rose-300 bg-rose-50 text-center">
                     <span className="text-[11px] text-rose-800 font-bold block">مجموع هزینه‌های دوره:</span>
-                    <span className="text-base font-black text-rose-700 tabular-nums">
+                    <span className="text-sm sm:text-base font-black text-rose-700 tabular-nums">
                       {formatToman(totalExpense)} تومان
                     </span>
                   </div>
+                  {totalCredit > 0 && (
+                    <div className="p-3.5 rounded-xl border border-amber-300 bg-amber-50 text-center">
+                      <span className="text-[11px] text-amber-800 font-bold block">مطالبات نسیه دوره:</span>
+                      <span className="text-sm sm:text-base font-black text-amber-700 tabular-nums">
+                        {formatToman(totalCredit)} تومان
+                      </span>
+                    </div>
+                  )}
                   <div className="p-3.5 rounded-xl border border-blue-300 bg-blue-50 text-center">
                     <span className="text-[11px] text-blue-800 font-bold block">سود خالص عملیاتی:</span>
-                    <span className="text-base font-black text-blue-800 tabular-nums">
+                    <span className="text-sm sm:text-base font-black text-blue-800 tabular-nums">
                       {formatToman(netProfit)} تومان
                     </span>
                   </div>
@@ -740,24 +765,25 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ transactions, settings
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200">
-                        {filteredTx.slice(0, 25).map((t) => (
-                          <tr key={t.id}>
-                            <td className="py-1 px-2 font-bold">
-                              {t.type === 'income' ? (
-                                <span className="text-emerald-700">درآمد</span>
-                              ) : (
-                                <span className="text-rose-700">هزینه</span>
-                              )}
-                            </td>
-                            <td className="py-1 px-2 truncate max-w-xs">{t.description}</td>
-                            <td className="py-1 px-2 font-bold tabular-nums font-mono">
-                              {formatToman(t.amount)}
-                            </td>
-                            <td className="py-1 px-2 font-mono text-slate-600">
-                              {formatJalaliReadable(t.date, false)}
-                            </td>
-                          </tr>
-                        ))}
+                        {filteredTx.slice(0, 25).map((t) => {
+                          const meta = getTransactionMeta(t);
+                          return (
+                            <tr key={t.id}>
+                              <td className="py-1 px-2 font-bold">
+                                <span className={meta.kind === 'credit' ? 'text-amber-700' : meta.kind === 'expense' ? 'text-rose-700' : 'text-emerald-700'}>
+                                  {meta.label}
+                                </span>
+                              </td>
+                              <td className="py-1 px-2 truncate max-w-xs">{t.description}</td>
+                              <td className="py-1 px-2 font-bold tabular-nums font-mono">
+                                {formatToman(t.amount)}
+                              </td>
+                              <td className="py-1 px-2 font-mono text-slate-600">
+                                {formatJalaliReadable(t.date, false)}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
