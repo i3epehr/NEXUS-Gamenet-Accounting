@@ -1755,7 +1755,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <h3 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
                     <span>بروزرسانی آنلاین نرم‌افزار</span>
                     <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                      {statusLoading ? 'v...' : `v${updateStatus?.packageVersion || '2.4.1'}`}
+                      {statusLoading ? 'v...' : `v${updateStatus?.packageVersion || '2.4.2'}`}
                     </span>
                   </h3>
                   <p className="text-xs text-slate-500 mt-0.5">

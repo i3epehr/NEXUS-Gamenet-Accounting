@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { Account, DashboardStats, GameNetSettings, Transaction } from '../types/index.ts';
 import { formatJalaliReadable, formatToman } from '../utils/jalali.ts';
+import { getTransactionMeta } from '../utils/transactions.ts';
 
 interface DashboardViewProps {
   stats: DashboardStats | null;
@@ -389,57 +390,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <tr key={tx.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors">
                   <td className="py-2.5 px-3">
                     {(() => {
-                      const isCreditTx =
-                        tx.paymentMethod === 'credit' ||
-                        tx.isCredit ||
-                        (!tx.toAccountId && (tx.description?.includes('نسیه') || tx.description?.includes('[نسیه]')));
-
-                      if (isCreditTx) {
-                        return (
-                          <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 font-semibold text-[11px] bg-amber-500/10 px-1.5 py-0.5 rounded-md border border-amber-500/20">
-                            ثبت نسیه
-                          </span>
-                        );
-                      }
-                      if (tx.type === 'income') {
-                        return (
-                          <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold">
-                            <ArrowDownLeft className="w-3.5 h-3.5" />
-                            درآمد
-                          </span>
-                        );
-                      }
-                      if (tx.type === 'expense') {
-                        return (
-                          <span className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400 font-semibold">
-                            <ArrowUpRight className="w-3.5 h-3.5" />
-                            هزینه
-                          </span>
-                        );
-                      }
-                      if (tx.type === 'transfer') {
-                        return (
-                          <span className="inline-flex items-center gap-1 text-sky-600 dark:text-sky-400 font-semibold">
-                            <RefreshCw className="w-3.5 h-3.5" />
-                            انتقال
-                          </span>
-                        );
-                      }
-                      if (tx.type === 'receivable_collection') {
-                        return (
-                          <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold text-[11px] bg-emerald-500/10 px-1.5 py-0.5 rounded-md border border-emerald-500/20">
-                            وصول طلب
-                          </span>
-                        );
-                      }
-                      if (tx.type === 'debt_settlement') {
-                        return (
-                          <span className="inline-flex items-center gap-1 text-purple-600 dark:text-purple-400 font-semibold text-[11px]">
-                            تسویه بدهی
-                          </span>
-                        );
-                      }
-                      return null;
+                      const meta = getTransactionMeta(tx);
+                      return (
+                        <span className={`inline-flex items-center gap-1 font-semibold text-[11px] px-1.5 py-0.5 rounded-md border ${meta.badgeClass}`}>
+                          {meta.label}
+                        </span>
+                      );
                     })()}
                   </td>
                   <td className="py-2.5 px-3">
@@ -461,24 +417,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   </td>
                   <td className="py-2.5 px-3 font-bold tabular-nums">
                     {(() => {
-                      const isCreditTx =
-                        tx.paymentMethod === 'credit' ||
-                        tx.isCredit ||
-                        (!tx.toAccountId && (tx.description?.includes('نسیه') || tx.description?.includes('[نسیه]')));
-
-                      let colorClass = 'text-slate-700 dark:text-slate-300';
-                      if (isCreditTx) {
-                        colorClass = 'text-amber-600 dark:text-amber-400';
-                      } else if (tx.type === 'income' || tx.type === 'receivable_collection') {
-                        colorClass = 'text-emerald-600 dark:text-emerald-400';
-                      } else if (tx.type === 'expense' || tx.type === 'debt_settlement') {
-                        colorClass = 'text-rose-600 dark:text-rose-400';
-                      } else if (tx.type === 'transfer') {
-                        colorClass = 'text-sky-600 dark:text-sky-400';
-                      }
-
+                      const meta = getTransactionMeta(tx);
                       return (
-                        <span className={colorClass}>
+                        <span className={meta.amountClass}>
                           {formatToman(tx.amount)}
                         </span>
                       );

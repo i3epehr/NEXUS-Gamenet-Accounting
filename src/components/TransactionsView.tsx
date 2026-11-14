@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { Account, Category, Person, Transaction, TransactionType } from '../types/index.ts';
 import { formatJalaliReadable, formatToman, normalizeDigits, normalizeForSearch, parseTomanInput } from '../utils/jalali.ts';
+import { getTransactionMeta } from '../utils/transactions.ts';
 import { ConfirmModal } from './ConfirmModal.tsx';
 import { useLockBodyScroll } from '../utils/useLockBodyScroll.ts';
 import { SearchablePersonSelect } from './SearchablePersonSelect.tsx';
@@ -73,16 +74,24 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
   const filteredTransactions = useMemo(() => {
     return transactions
       .filter((tx) => {
-        const isCreditTx =
-          tx.paymentMethod === 'credit' ||
-          tx.isCredit ||
-          (!tx.toAccountId && (tx.description?.includes('نسیه') || tx.description?.includes('[نسیه]')));
-
         if (selectedType !== 'all') {
+          const meta = getTransactionMeta(tx);
           if (selectedType === 'credit') {
-            if (!isCreditTx) return false;
+            if (meta.kind !== 'credit') return false;
           } else if (selectedType === 'income') {
-            if (tx.type !== 'income' || isCreditTx) return false;
+            if (meta.kind !== 'income') return false;
+          } else if (selectedType === 'wallet_charge') {
+            if (meta.kind !== 'wallet_charge') return false;
+          } else if (selectedType === 'wallet_deduct') {
+            if (meta.kind !== 'wallet_deduct') return false;
+          } else if (selectedType === 'receivable_collection') {
+            if (meta.kind !== 'receivable_collection') return false;
+          } else if (selectedType === 'debt_settlement') {
+            if (meta.kind !== 'debt_settlement') return false;
+          } else if (selectedType === 'expense') {
+            if (meta.kind !== 'expense') return false;
+          } else if (selectedType === 'transfer') {
+            if (meta.kind !== 'transfer') return false;
           } else if (tx.type !== selectedType) {
             return false;
           }
@@ -123,16 +132,12 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
     let exp = 0;
     let creditDebt = 0;
     filteredTransactions.forEach((tx) => {
-      const isCreditTx =
-        tx.paymentMethod === 'credit' ||
-        tx.isCredit ||
-        (!tx.toAccountId && (tx.description?.includes('نسیه') || tx.description?.includes('[نسیه]')));
-
-      if (isCreditTx) {
+      const meta = getTransactionMeta(tx);
+      if (meta.kind === 'credit') {
         creditDebt += tx.amount;
-      } else if (tx.type === 'income' || tx.type === 'receivable_collection') {
+      } else if (meta.kind === 'income' || meta.kind === 'receivable_collection' || meta.kind === 'wallet_charge') {
         cashIn += tx.amount;
-      } else if (tx.type === 'expense' || tx.type === 'debt_settlement') {
+      } else if (meta.kind === 'expense' || meta.kind === 'debt_settlement' || meta.kind === 'wallet_deduct') {
         exp += tx.amount;
       }
     });
@@ -248,11 +253,13 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
               className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white text-xs focus:outline-none focus:ring-2 focus:ring-[#2596BE]"
             >
               <option value="all">همه انواع تراکنش‌ها</option>
-              <option value="income">درآمدها (نقدی / پوز)</option>
+              <option value="income">درآمدها (نقدی / کارتخوان)</option>
               <option value="credit">نسیه / بدهی مشتریان</option>
-              <option value="receivable_collection">وصول مطالبات / تسویه حساب</option>
+              <option value="wallet_charge">شارژ کیف پول</option>
+              <option value="receivable_collection">وصول مطالبات / تسویه نسیه</option>
               <option value="expense">هزینه‌ها (خروجی)</option>
               <option value="transfer">انتقالات داخلی</option>
+              <option value="wallet_deduct">کسر از کیف پول / عودت وجه</option>
               <option value="debt_settlement">تسویه بدهی طرف‌حساب</option>
             </select>
           </div>
@@ -359,57 +366,12 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                     </td>
                     <td className="py-3 px-4 whitespace-nowrap">
                       {(() => {
-                        const isCreditTx =
-                          tx.paymentMethod === 'credit' ||
-                          tx.isCredit ||
-                          (!tx.toAccountId && (tx.description?.includes('نسیه') || tx.description?.includes('[نسیه]')));
-
-                        if (isCreditTx) {
-                          return (
-                            <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400 font-bold bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 rounded-lg text-xs">
-                              ثبت نسیه (بدهی مشتری)
-                            </span>
-                          );
-                        }
-                        if (tx.type === 'income') {
-                          return (
-                            <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-bold">
-                              <ArrowDownLeft className="w-3.5 h-3.5" />
-                              درآمد
-                            </span>
-                          );
-                        }
-                        if (tx.type === 'expense') {
-                          return (
-                            <span className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400 font-bold">
-                              <ArrowUpRight className="w-3.5 h-3.5" />
-                              هزینه
-                            </span>
-                          );
-                        }
-                        if (tx.type === 'transfer') {
-                          return (
-                            <span className="inline-flex items-center gap-1 text-sky-600 dark:text-sky-400 font-bold">
-                              <RefreshCw className="w-3.5 h-3.5" />
-                              انتقال
-                            </span>
-                          );
-                        }
-                        if (tx.type === 'receivable_collection') {
-                          return (
-                            <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-bold bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 rounded-lg text-xs">
-                              وصول طلب (تسویه)
-                            </span>
-                          );
-                        }
-                        if (tx.type === 'debt_settlement') {
-                          return (
-                            <span className="inline-flex items-center gap-1 text-purple-600 dark:text-purple-400 font-bold">
-                              تسویه بدهی طرف‌حساب
-                            </span>
-                          );
-                        }
-                        return null;
+                        const meta = getTransactionMeta(tx);
+                        return (
+                          <span className={`inline-flex items-center gap-1 font-bold px-2 py-0.5 rounded-lg text-xs border ${meta.badgeClass}`}>
+                            {meta.label}
+                          </span>
+                        );
                       })()}
                     </td>
                     <td className="py-3 px-4 text-slate-600 dark:text-slate-400 whitespace-nowrap">
@@ -439,24 +401,9 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                     </td>
                     <td className="py-3 px-4 font-black tabular-nums whitespace-nowrap text-sm">
                       {(() => {
-                        const isCreditTx =
-                          tx.paymentMethod === 'credit' ||
-                          tx.isCredit ||
-                          (!tx.toAccountId && (tx.description?.includes('نسیه') || tx.description?.includes('[نسیه]')));
-
-                        let colorClass = 'text-slate-700 dark:text-slate-300';
-                        if (isCreditTx) {
-                          colorClass = 'text-amber-600 dark:text-amber-400';
-                        } else if (tx.type === 'income' || tx.type === 'receivable_collection') {
-                          colorClass = 'text-emerald-600 dark:text-emerald-400';
-                        } else if (tx.type === 'expense' || tx.type === 'debt_settlement') {
-                          colorClass = 'text-rose-600 dark:text-rose-400';
-                        } else if (tx.type === 'transfer') {
-                          colorClass = 'text-sky-600 dark:text-sky-400';
-                        }
-
+                        const meta = getTransactionMeta(tx);
                         return (
-                          <span className={colorClass}>
+                          <span className={meta.amountClass}>
                             {formatToman(tx.amount)}
                           </span>
                         );

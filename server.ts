@@ -2033,7 +2033,10 @@ app.delete('/api/transactions/:id', (req: AuthedRequest, res: Response) => {
       if (item.productId) {
         const prod = db.products.find((p) => p.id === item.productId);
         if (prod) {
-          restoreProductStock(prod, item.quantity);
+          restoreProductStock(prod, item.quantity, {
+            deductedFromFridge: item.deductedFromFridge,
+            deductedFromWarehouse: item.deductedFromWarehouse,
+          });
           db.inventoryLogs.unshift({
             id: `inv_restore_tx_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
             productId: prod.id,
@@ -2372,7 +2375,7 @@ function deductProductStock(
 function restoreProductStock(
   prod: Product,
   qty: number,
-  preferredLocation: 'fridge' | 'warehouse' | 'both' = 'warehouse'
+  exactDeductions?: { deductedFromFridge?: number; deductedFromWarehouse?: number }
 ): void {
   if (typeof prod.warehouseStock !== 'number' || isNaN(prod.warehouseStock)) {
     prod.warehouseStock = Math.max(0, prod.stock || 0);
@@ -2380,10 +2383,17 @@ function restoreProductStock(
   if (typeof prod.fridgeStock !== 'number' || isNaN(prod.fridgeStock)) {
     prod.fridgeStock = 0;
   }
-  if (preferredLocation === 'fridge') {
-    prod.fridgeStock += qty;
+  if (
+    exactDeductions &&
+    (exactDeductions.deductedFromFridge !== undefined || exactDeductions.deductedFromWarehouse !== undefined)
+  ) {
+    const fromFridge = Math.max(0, Number(exactDeductions.deductedFromFridge) || 0);
+    const fromWarehouse = Math.max(0, Number(exactDeductions.deductedFromWarehouse) || 0);
+    prod.fridgeStock += fromFridge;
+    prod.warehouseStock += fromWarehouse;
   } else {
-    prod.warehouseStock += qty;
+    // Priority to fridgeStock (restoring immediate sales items), preserving warehouse stock
+    prod.fridgeStock += qty;
   }
   prod.stock = Math.max(0, prod.fridgeStock + prod.warehouseStock);
 }
@@ -2423,6 +2433,8 @@ app.post('/api/buffet/sale', (req: Request, res: Response) => {
       quantity: qty,
       unitPrice,
       totalPrice: itemTotal,
+      deductedFromFridge,
+      deductedFromWarehouse,
     });
 
     const deductDetail = deductedFromFridge > 0 && deductedFromWarehouse > 0
@@ -3140,10 +3152,17 @@ function executeTabCheckout(
   // Deduct stock for inventory products being settled
   if (itemsToSettle.length > 0) {
     for (const item of itemsToSettle) {
+      let deductedFromFridge = 0;
+      let deductedFromWarehouse = 0;
       if (item.productId) {
         const prod = db.products.find((p) => p.id === item.productId);
         if (prod) {
-          const { deductedFromFridge, deductedFromWarehouse } = deductProductStock(prod, item.quantity);
+          const res = deductProductStock(prod, item.quantity);
+          deductedFromFridge = res.deductedFromFridge;
+          deductedFromWarehouse = res.deductedFromWarehouse;
+          item.deductedFromFridge = deductedFromFridge;
+          item.deductedFromWarehouse = deductedFromWarehouse;
+
           const detail = deductedFromFridge > 0 && deductedFromWarehouse > 0
             ? ` (${deductedFromFridge} از یخچال + ${deductedFromWarehouse} از انبار)`
             : deductedFromFridge > 0
@@ -3170,6 +3189,8 @@ function executeTabCheckout(
         quantity: item.quantity,
         unitPrice: item.unitPrice,
         totalPrice: item.totalPrice,
+        deductedFromFridge,
+        deductedFromWarehouse,
       });
     }
   }
@@ -3242,86 +3263,147 @@ function executeTabCheckout(
     paymentNote = '';
   }
 
-  // Intelligent Category Detection (Fixes all-categorized-as-gaming bug)
-  let incomeCat: Category | undefined;
-  if (categoryId && categoryId !== 'auto') {
-    incomeCat = db.categories.find((c) => c.id === categoryId);
+  // Calculate buffet portion vs gaming portion for intelligent separation
+  const buffetItems = itemsToSettle.filter((it) => !!it.productId);
+  const buffetItemsTotal = buffetItems.reduce((sum, it) => sum + (it.totalPrice || 0), 0);
+  const gamingItems = itemsToSettle.filter((it) => !it.productId);
+  const gamingItemsTotal = gamingItems.reduce((sum, it) => sum + (it.totalPrice || 0), 0);
+  const gamingTimerTotal =
+    (Number(tab.timerCalculatedCost) || 0) +
+    (smartLaunchSettlement ? Number(smartLaunchSettlement.amount) || 0 : 0);
+  let rawGamingTotal = gamingItemsTotal + gamingTimerTotal;
+
+  if (rawGamingTotal === 0 && buffetItemsTotal === 0 && totalAmount > 0) {
+    rawGamingTotal = totalAmount;
   }
 
-  if (!incomeCat) {
-    const isOnlyBuffet =
-      settleScope === 'buffet' ||
-      (tab.items.length > 0 &&
-        !tab.isTimerActive &&
-        (!tab.timerCalculatedCost || tab.timerCalculatedCost <= 0) &&
-        !smartLaunchSettlement &&
-        !tab.smartLaunchSettled);
-
-    const titleLower = (tab.title || '').toLowerCase();
-
-    if (isOnlyBuffet) {
-      incomeCat =
-        db.categories.find((c) => c.type === 'income' && (c.section === 'buffet' || c.id === 'cat_buffet_inc')) ||
-        getCategoryForSection(db, 'income', 'buffet', ['بوفه', 'خوراکی', 'فروش', 'کافه']);
-    } else if (titleLower.includes('pc') || titleLower.includes('سیستم') || titleLower.includes('کامپیوتر')) {
-      incomeCat =
-        db.categories.find((c) => c.type === 'income' && (c.id === 'cat_pc' || c.name.toLowerCase().includes('pc') || c.name.includes('سیستم'))) ||
-        db.categories.find((c) => c.type === 'income' && c.section === 'gaming');
-    } else if (titleLower.includes('vip') || titleLower.includes('وی آی پی') || titleLower.includes('اتاق')) {
-      incomeCat =
-        db.categories.find((c) => c.type === 'income' && (c.id === 'cat_vip' || c.section === 'vip' || c.name.toLowerCase().includes('vip') || c.name.includes('وی آی پی'))) ||
-        db.categories.find((c) => c.type === 'income' && c.section === 'gaming');
-    } else if (titleLower.includes('ps4') || titleLower.includes('پی اس ۴')) {
-      incomeCat =
-        db.categories.find((c) => c.type === 'income' && c.name.toLowerCase().includes('ps4')) ||
-        db.categories.find((c) => c.type === 'income' && c.id === 'cat_ps5') ||
-        db.categories.find((c) => c.type === 'income' && c.section === 'gaming');
-    } else {
-      incomeCat =
-        db.categories.find((c) => c.type === 'income' && c.id === 'cat_ps5') ||
-        db.categories.find((c) => c.type === 'income' && c.section === 'gaming') ||
-        db.categories.find((c) => c.type === 'income');
-    }
+  // Deduct deposit from gaming portion first, then buffet
+  let netGaming = rawGamingTotal;
+  let netBuffet = buffetItemsTotal;
+  if (depositDeduction > 0) {
+    const deductFromGaming = Math.min(rawGamingTotal, depositDeduction);
+    netGaming = Math.max(0, rawGamingTotal - deductFromGaming);
+    const remDeposit = depositDeduction - deductFromGaming;
+    netBuffet = Math.max(0, buffetItemsTotal - remDeposit);
   }
 
-  if (!incomeCat) {
-    incomeCat = getCategoryForSection(db, 'income', 'gaming', ['میز', 'گیمینگ', 'کنسول', 'بازی']);
+  // Determine Buffet Category
+  const buffetCat =
+    db.categories.find((c) => c.type === 'income' && (c.id === 'cat_buffet_inc' || c.section === 'buffet')) ||
+    db.categories.find((c) => c.type === 'income' && (c.name.includes('بوفه') || c.name.includes('کافه'))) ||
+    db.categories.find((c) => c.type === 'income');
+
+  // Determine Gaming Category
+  const titleLower = (tab.title || '').toLowerCase();
+  let gamingCat: Category | undefined;
+  if (titleLower.includes('pc') || titleLower.includes('سیستم') || titleLower.includes('کامپیوتر')) {
+    gamingCat = db.categories.find((c) => c.type === 'income' && (c.id === 'cat_pc' || c.name.toLowerCase().includes('pc') || c.name.includes('سیستم')));
+  } else if (titleLower.includes('vip') || titleLower.includes('وی آی پی') || titleLower.includes('اتاق')) {
+    gamingCat = db.categories.find((c) => c.type === 'income' && (c.id === 'cat_vip' || c.name.toLowerCase().includes('vip') || c.name.includes('وی آی پی')));
+  } else if (titleLower.includes('ps4') || titleLower.includes('پی اس ۴')) {
+    gamingCat = db.categories.find((c) => c.type === 'income' && c.name.toLowerCase().includes('ps4'));
+  } else if (titleLower.includes('بیلیارد') || titleLower.includes('billiard')) {
+    gamingCat = db.categories.find((c) => c.type === 'income' && (c.id === 'cat_billiard' || c.name.includes('بیلیارد')));
+  }
+  if (!gamingCat) {
+    gamingCat =
+      db.categories.find((c) => c.type === 'income' && (c.id === 'cat_ps5' || c.name.toLowerCase().includes('ps5') || c.name.includes('کنسول'))) ||
+      db.categories.find((c) => c.type === 'income' && c.section === 'gaming') ||
+      db.categories[0];
   }
 
-  let desc = '';
-  if (settleScope === 'buffet') {
-    desc = `تسویه بوفه ${tab.title} (${itemsToSettle.map((i) => `${i.productName} × ${i.quantity}`).join(' + ')})${paymentNote}`;
-  } else if (settleScope === 'custom_amount') {
-    desc = `تسویه علی‌الحساب مبلغ ${finalPayable.toLocaleString('fa-IR')} ت از ${tab.title}${paymentNote}`;
+  const createdTransactions: Transaction[] = [];
+
+  if (settleScope === 'all' && netGaming > 0 && netBuffet > 0) {
+    // Intelligent Separation: Split gaming revenue and buffet revenue into separate transactions!
+    const txGaming: Transaction = {
+      id: `tx_tab_${Date.now()}_game`,
+      type: 'income',
+      amount: netGaming,
+      date: date || nowIso,
+      jalaliDate: jalaliDate || '',
+      categoryId: gamingCat?.id || 'cat_ps5',
+      categoryName: gamingCat?.name || 'کرایه دستگاه',
+      toAccountId: targetAccount?.id,
+      toAccountName: targetAccount?.name,
+      personId: targetPerson?.id,
+      personName: targetPerson?.name,
+      description: `تسویه تایم/دستگاه ${tab.title}${targetPerson ? ` (${targetPerson.name})` : ''}${paymentNote}`,
+      paymentMethod: paymentMethod,
+      isCredit: isCredit,
+      tabId: tab.id,
+      createdBy: 'اپراتور',
+      createdAt: nowIso,
+    };
+
+    const buffetReceiptItems = receiptItems.filter((i) => !!i.productId);
+    const txBuffet: Transaction = {
+      id: `tx_tab_${Date.now()}_buf`,
+      type: 'income',
+      amount: netBuffet,
+      date: date || nowIso,
+      jalaliDate: jalaliDate || '',
+      categoryId: buffetCat?.id || 'cat_buffet_inc',
+      categoryName: buffetCat?.name || 'فروش بوفه و کافه',
+      toAccountId: targetAccount?.id,
+      toAccountName: targetAccount?.name,
+      personId: targetPerson?.id,
+      personName: targetPerson?.name,
+      description: `تسویه سفارشات بوفه ${tab.title} (${buffetReceiptItems.map((i) => `${i.productName} × ${i.quantity}`).join(' + ')})${targetPerson ? ` (${targetPerson.name})` : ''}${paymentNote}`,
+      paymentMethod: paymentMethod,
+      isCredit: isCredit,
+      tabId: tab.id,
+      receiptItems: buffetReceiptItems,
+      createdBy: 'اپراتور',
+      createdAt: nowIso,
+    };
+
+    db.transactions.unshift(txBuffet);
+    db.transactions.unshift(txGaming);
+    createdTransactions.push(txGaming, txBuffet);
   } else {
-    const descSuffix = depositDeduction > 0
-      ? ` (کل فاکتور: ${totalAmount.toLocaleString('fa-IR')} ت - کسر بیعانه: ${depositDeduction.toLocaleString('fa-IR')} ت = پرداختی: ${finalPayable.toLocaleString('fa-IR')} ت)`
-      : '';
-    desc = `تسویه ${tab.title} (${tab.items.map((i) => `${i.productName} × ${i.quantity}`).join(' + ')})${descSuffix}${paymentNote}`;
+    // Single transaction (only buffet, only gaming, or custom scope)
+    const isBuffetOnly = (netBuffet > 0 && netGaming === 0) || settleScope === 'buffet';
+    const chosenCat = isBuffetOnly ? buffetCat : gamingCat;
+
+    let desc = '';
+    if (settleScope === 'buffet') {
+      desc = `تسویه بوفه ${tab.title} (${itemsToSettle.map((i) => `${i.productName} × ${i.quantity}`).join(' + ')})${paymentNote}`;
+    } else if (settleScope === 'custom_amount') {
+      desc = `تسویه علی‌الحساب مبلغ ${finalPayable.toLocaleString('fa-IR')} ت از ${tab.title}${paymentNote}`;
+    } else {
+      const descSuffix = depositDeduction > 0
+        ? ` (کل فاکتور: ${totalAmount.toLocaleString('fa-IR')} ت - کسر بیعانه: ${depositDeduction.toLocaleString('fa-IR')} ت = پرداختی: ${finalPayable.toLocaleString('fa-IR')} ت)`
+        : '';
+      desc = `تسویه ${tab.title}${itemsToSettle.length > 0 ? ` (${itemsToSettle.map((i) => `${i.productName} × ${i.quantity}`).join(' + ')})` : ''}${descSuffix}${paymentNote}`;
+    }
+
+    const tx: Transaction = {
+      id: `tx_tab_${Date.now()}`,
+      type: 'income',
+      amount: finalPayable,
+      date: date || nowIso,
+      jalaliDate: jalaliDate || '',
+      categoryId: chosenCat?.id || 'cat_ps5',
+      categoryName: chosenCat?.name || 'درآمد گیم‌نت',
+      toAccountId: targetAccount?.id,
+      toAccountName: targetAccount?.name,
+      personId: targetPerson?.id,
+      personName: targetPerson?.name,
+      description: desc,
+      paymentMethod: paymentMethod,
+      isCredit: isCredit,
+      tabId: tab.id,
+      receiptItems: itemsToSettle.length > 0 ? receiptItems : undefined,
+      createdBy: 'اپراتور',
+      createdAt: nowIso,
+    };
+
+    db.transactions.unshift(tx);
+    createdTransactions.push(tx);
   }
 
-  const tx: Transaction = {
-    id: `tx_tab_${Date.now()}`,
-    type: 'income',
-    amount: finalPayable,
-    date: date || nowIso,
-    jalaliDate: jalaliDate || '',
-    categoryId: incomeCat.id,
-    categoryName: incomeCat.name,
-    toAccountId: targetAccount?.id,
-    toAccountName: targetAccount?.name,
-    personId: targetPerson?.id,
-    personName: targetPerson?.name,
-    description: desc,
-    paymentMethod: paymentMethod,
-    isCredit: isCredit,
-    tabId: tab.id,
-    receiptItems,
-    createdBy: 'اپراتور',
-    createdAt: nowIso,
-  };
-
-  db.transactions.unshift(tx);
+  const tx = createdTransactions[0];
 
   // Tab updates based on scope
   if (settleScope === 'buffet') {
@@ -3369,7 +3451,7 @@ function executeTabCheckout(
     'tab',
     tab.id,
     'checkout',
-    `${settleScope === 'buffet' ? 'تسویه بوفه' : settleScope === 'custom_amount' ? 'تسویه علی‌الحساب' : 'تسویه کامل'} میز ${tab.title}: مبلغ ${finalPayable} ت (سرفصل: ${incomeCat.name})`
+    `${settleScope === 'buffet' ? 'تسویه بوفه' : settleScope === 'custom_amount' ? 'تسویه علی‌الحساب' : 'تسویه کامل'} میز ${tab.title}: مبلغ ${finalPayable} ت (${createdTransactions.map((t) => t.categoryName).filter(Boolean).join(' + ')})`
   );
 
   return { transaction: tx, tab };
@@ -3577,66 +3659,79 @@ app.post('/api/tabs/:id/reopen', (req: Request, res: Response) => {
     return;
   }
 
-  // 1. Find previous checkout transaction reliably by ID, tabId, or title match
-  const txIndex = db.transactions.findIndex(
+  // 1. Find all previous checkout transactions linked to this desk (supports split gaming + buffet txs)
+  const relatedTxs = db.transactions.filter(
     (t) =>
       (tab.checkoutTransactionId && t.id === tab.checkoutTransactionId) ||
       t.tabId === tab.id ||
       (t.id.startsWith('tx_tab_') && t.description.includes(tab.title))
   );
 
-  if (txIndex !== -1) {
-    const oldTx = db.transactions[txIndex];
+  let restoredAnyStock = false;
 
-    // Revert account balance
-    if (oldTx.toAccountId) {
-      const acc = db.accounts.find((a) => a.id === oldTx.toAccountId);
-      if (acc) {
-        acc.balance = Math.max(0, acc.balance - oldTx.amount);
+  if (relatedTxs.length > 0) {
+    for (const oldTx of relatedTxs) {
+      // Revert account balance
+      if (oldTx.toAccountId) {
+        const acc = db.accounts.find((a) => a.id === oldTx.toAccountId);
+        if (acc) {
+          acc.balance = Math.max(0, acc.balance - oldTx.amount);
+        }
       }
-    }
 
-    // Revert customer credit balance if credit
-    if (oldTx.personId && (oldTx.description.includes('[نسیه]') || !oldTx.toAccountId)) {
-      const person = db.persons.find((p) => p.id === oldTx.personId);
-      if (person) {
-        person.currentBalance = Math.max(0, person.currentBalance - oldTx.amount);
+      // Revert customer credit balance if credit
+      if (oldTx.personId && (oldTx.description.includes('[نسیه]') || !oldTx.toAccountId)) {
+        const person = db.persons.find((p) => p.id === oldTx.personId);
+        if (person) {
+          person.currentBalance = Math.max(0, person.currentBalance - oldTx.amount);
+        }
       }
-    }
 
-    // Restore inventory stock that was deducted on checkout
-    if (oldTx.receiptItems && Array.isArray(oldTx.receiptItems)) {
-      for (const item of oldTx.receiptItems) {
-        if (item.productId) {
-          const prod = db.products.find((p) => p.id === item.productId);
-          if (prod) {
-            restoreProductStock(prod, item.quantity);
-            db.inventoryLogs.unshift({
-              id: `inv_restore_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-              productId: prod.id,
-              productName: prod.name,
-              type: 'manual_correction',
-              quantity: item.quantity,
-              costPerUnit: prod.purchasePrice,
-              reason: `بازگشت به انبار به علت بازگشایی و اصلاح میز: ${tab.title}`,
-              date: new Date().toISOString(),
-              createdAt: new Date().toISOString(),
-            });
+      // Restore inventory stock that was deducted on checkout
+      if (oldTx.receiptItems && Array.isArray(oldTx.receiptItems)) {
+        for (const item of oldTx.receiptItems) {
+          if (item.productId) {
+            const prod = db.products.find((p) => p.id === item.productId);
+            if (prod) {
+              restoreProductStock(prod, item.quantity, {
+                deductedFromFridge: item.deductedFromFridge,
+                deductedFromWarehouse: item.deductedFromWarehouse,
+              });
+              restoredAnyStock = true;
+              db.inventoryLogs.unshift({
+                id: `inv_restore_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                productId: prod.id,
+                productName: prod.name,
+                type: 'manual_correction',
+                quantity: item.quantity,
+                costPerUnit: prod.purchasePrice,
+                reason: `بازگشت به یخچال/انبار به علت بازگشایی و اصلاح میز: ${tab.title}`,
+                date: new Date().toISOString(),
+                createdAt: new Date().toISOString(),
+              });
+            }
           }
         }
       }
-    }
 
-    // Remove the old transaction
-    db.transactions.splice(txIndex, 1);
-  } else {
-    // Fallback: If old transaction was not found (e.g. legacy demo data),
-    // restore stock using tab's items so closing again doesn't double-deduct stock
+      // Remove the old transaction
+      const idx = db.transactions.indexOf(oldTx);
+      if (idx !== -1) {
+        db.transactions.splice(idx, 1);
+      }
+    }
+  }
+
+  // Fallback: If no receiptItems were in transactions or old transactions were missing
+  if (!restoredAnyStock) {
     for (const item of tab.items) {
       if (item.productId) {
         const prod = db.products.find((p) => p.id === item.productId);
         if (prod) {
-          restoreProductStock(prod, item.quantity);
+          restoreProductStock(prod, item.quantity, {
+            deductedFromFridge: item.deductedFromFridge,
+            deductedFromWarehouse: item.deductedFromWarehouse,
+          });
           db.inventoryLogs.unshift({
             id: `inv_restore_fallback_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
             productId: prod.id,
@@ -3644,7 +3739,7 @@ app.post('/api/tabs/:id/reopen', (req: Request, res: Response) => {
             type: 'manual_correction',
             quantity: item.quantity,
             costPerUnit: prod.purchasePrice,
-            reason: `بازگشت به انبار به علت بازگشایی میز: ${tab.title}`,
+            reason: `بازگشت به یخچال/انبار به علت بازگشایی میز: ${tab.title}`,
             date: new Date().toISOString(),
             createdAt: new Date().toISOString(),
           });
@@ -3704,6 +3799,8 @@ app.delete('/api/tabs/:id', (req: Request, res: Response) => {
   );
 
   let revertedTxAmount = 0;
+  let stockRestoredFromTx = false;
+
   for (const oldTx of relatedTxs) {
     revertedTxAmount += oldTx.amount;
 
@@ -3727,6 +3824,33 @@ app.delete('/api/tabs/:id', (req: Request, res: Response) => {
       }
     }
 
+    // Restore stock from transaction's receiptItems
+    if (oldTx.receiptItems && Array.isArray(oldTx.receiptItems)) {
+      for (const item of oldTx.receiptItems) {
+        if (item.productId) {
+          const prod = db.products.find((p) => p.id === item.productId);
+          if (prod) {
+            restoreProductStock(prod, item.quantity, {
+              deductedFromFridge: item.deductedFromFridge,
+              deductedFromWarehouse: item.deductedFromWarehouse,
+            });
+            stockRestoredFromTx = true;
+            db.inventoryLogs.unshift({
+              id: `inv_restore_del_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+              productId: prod.id,
+              productName: prod.name,
+              type: 'manual_correction',
+              quantity: item.quantity,
+              costPerUnit: prod.purchasePrice,
+              reason: `بازگشت به یخچال/انبار به علت حذف فاکتور / میز: ${deleted.title}`,
+              date: new Date().toISOString(),
+              createdAt: new Date().toISOString(),
+            });
+          }
+        }
+      }
+    }
+
     // Remove the transaction from db
     const txIdx = db.transactions.indexOf(oldTx);
     if (txIdx !== -1) {
@@ -3734,21 +3858,24 @@ app.delete('/api/tabs/:id', (req: Request, res: Response) => {
     }
   }
 
-  // 2. Restore any inventory items from the deleted tab ONLY if tab was closed/settled
-  if (deleted.status === 'closed') {
+  // 2. Restore any inventory items from the deleted tab ONLY if tab was closed/settled and not already restored from tx
+  if (deleted.status === 'closed' && !stockRestoredFromTx) {
     for (const item of deleted.items || []) {
       if (item.productId) {
         const prod = db.products.find((p) => p.id === item.productId);
         if (prod) {
-          restoreProductStock(prod, item.quantity);
+          restoreProductStock(prod, item.quantity, {
+            deductedFromFridge: item.deductedFromFridge,
+            deductedFromWarehouse: item.deductedFromWarehouse,
+          });
           db.inventoryLogs.unshift({
-            id: `inv_restore_del_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            id: `inv_restore_del_fb_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
             productId: prod.id,
             productName: prod.name,
             type: 'manual_correction',
             quantity: item.quantity,
             costPerUnit: prod.purchasePrice,
-            reason: `بازگشت به انبار به علت حذف فاکتور / میز: ${deleted.title}`,
+            reason: `بازگشت به یخچال/انبار به علت حذف فاکتور / میز: ${deleted.title}`,
             date: new Date().toISOString(),
             createdAt: new Date().toISOString(),
           });
@@ -4154,6 +4281,7 @@ app.post('/api/contacts/:id/wallet', (req: Request, res: Response) => {
     tx = {
       id: `tx_wlt_${Date.now()}`,
       type: 'receivable_collection',
+      paymentMethod: 'wallet_charge',
       amount: numAmount,
       date: date || nowIso,
       jalaliDate: jalaliDate || '',
@@ -4182,6 +4310,7 @@ app.post('/api/contacts/:id/wallet', (req: Request, res: Response) => {
     tx = {
       id: `tx_wlt_${Date.now()}`,
       type: 'debt_settlement',
+      paymentMethod: 'wallet_deduct',
       amount: numAmount,
       date: date || nowIso,
       jalaliDate: jalaliDate || '',
@@ -4213,6 +4342,7 @@ app.post('/api/contacts/:id/wallet', (req: Request, res: Response) => {
         tx = {
           id: `tx_wlt_${Date.now()}`,
           type: 'receivable_collection',
+          paymentMethod: 'wallet_charge',
           amount: Math.abs(diff),
           date: date || nowIso,
           jalaliDate: jalaliDate || '',
@@ -4231,6 +4361,7 @@ app.post('/api/contacts/:id/wallet', (req: Request, res: Response) => {
         tx = {
           id: `tx_wlt_${Date.now()}`,
           type: 'debt_settlement',
+          paymentMethod: 'wallet_deduct',
           amount: diff,
           date: date || nowIso,
           jalaliDate: jalaliDate || '',
@@ -4504,10 +4635,15 @@ app.post('/api/checkout/unified', (req: AuthedRequest, res: Response) => {
     const itemTotal = unitPrice * qty;
     calculatedTotal += itemTotal;
 
+    let deductedFromFridge = 0;
+    let deductedFromWarehouse = 0;
+
     if (item.productId) {
       const prod = db.products.find((p) => p.id === item.productId);
       if (prod) {
-        const { deductedFromFridge, deductedFromWarehouse } = deductProductStock(prod, qty);
+        const res = deductProductStock(prod, qty);
+        deductedFromFridge = res.deductedFromFridge;
+        deductedFromWarehouse = res.deductedFromWarehouse;
         const detail = deductedFromFridge > 0 && deductedFromWarehouse > 0
           ? ` (${deductedFromFridge} از یخچال + ${deductedFromWarehouse} از انبار)`
           : deductedFromFridge > 0
@@ -4535,6 +4671,8 @@ app.post('/api/checkout/unified', (req: AuthedRequest, res: Response) => {
       quantity: qty,
       unitPrice,
       totalPrice: itemTotal,
+      deductedFromFridge,
+      deductedFromWarehouse,
     });
   }
 

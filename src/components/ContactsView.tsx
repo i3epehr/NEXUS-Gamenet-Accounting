@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { Account, GameNetSettings, OpenTab, Person, PersonType, Transaction } from '../types/index.ts';
 import { formatJalaliReadable, formatToman, getJalaliDateString, normalizeDigits, parseTomanInput, normalizeForSearch, cleanPhoneForSearch } from '../utils/jalali.ts';
+import { getTransactionMeta, getPaymentMethodBadge } from '../utils/transactions.ts';
 import { ConfirmModal } from './ConfirmModal.tsx';
 import { useLockBodyScroll } from '../utils/useLockBodyScroll.ts';
 
@@ -117,6 +118,8 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
 
   const [detailPerson, setDetailPerson] = useState<Person | null>(null);
   const [customerHistorySearch, setCustomerHistorySearch] = useState('');
+  const [historyDateFilter, setHistoryDateFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
+  const [historyTypeFilter, setHistoryTypeFilter] = useState<'all' | 'income' | 'credit' | 'wallet' | 'collection'>('all');
   const [selectedHistoryTx, setSelectedHistoryTx] = useState<Transaction | null>(null);
   const [selectedHistoryTab, setSelectedHistoryTab] = useState<OpenTab | null>(null);
   const [editingPerson, setEditingPerson] = useState<Person | null>(null);
@@ -1279,8 +1282,8 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                     </div>
                   )}
 
-                  {/* Search in Customer History */}
-                  <div className="pt-2">
+                  {/* Search and Filters in Customer History */}
+                  <div className="pt-2 space-y-2.5">
                     <div className="relative">
                       <input
                         type="text"
@@ -1300,180 +1303,202 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                         </button>
                       )}
                     </div>
+
+                    {/* Filter Pills for Date & Type */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {/* Date Filter */}
+                        <div className="flex items-center gap-1">
+                          <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <select
+                            value={historyDateFilter}
+                            onChange={(e) => setHistoryDateFilter(e.target.value as any)}
+                            className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-300 text-xs focus:ring-2 focus:ring-[#2596BE]/40 outline-none"
+                          >
+                            <option value="all">همه تاریخ‌ها</option>
+                            <option value="today">امروز</option>
+                            <option value="week">۷ روز اخیر</option>
+                            <option value="month">۳۰ روز اخیر</option>
+                          </select>
+                        </div>
+
+                        {/* Type Filter */}
+                        <div className="flex items-center gap-1">
+                          <Receipt className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <select
+                            value={historyTypeFilter}
+                            onChange={(e) => setHistoryTypeFilter(e.target.value as any)}
+                            className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-300 text-xs focus:ring-2 focus:ring-[#2596BE]/40 outline-none"
+                          >
+                            <option value="all">همه انواع تراکنش‌ها</option>
+                            <option value="income">درآمد و فاکتورها</option>
+                            <option value="credit">نسیه و بدهی ثبت‌شده</option>
+                            <option value="wallet">شارژ و کسر کیف پول</option>
+                            <option value="collection">تسویه بدهی و وصول طلب</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {(customerHistorySearch || historyDateFilter !== 'all' || historyTypeFilter !== 'all') && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCustomerHistorySearch('');
+                            setHistoryDateFilter('all');
+                            setHistoryTypeFilter('all');
+                          }}
+                          className="text-[#2596BE] hover:underline text-[11px] font-medium cursor-pointer"
+                        >
+                          پاک کردن فیلترها
+                        </button>
+                      )}
+                    </div>
                   </div>
 
-                  {/* Related Active/Recent Tabs */}
+                  {/* Unified Comprehensive History Records */}
                   {(() => {
                     const histQ = customerHistorySearch.trim().toLowerCase();
                     const histNormQ = normalizeForSearch(customerHistorySearch);
-                    const filteredRelatedTabs = relatedTabs.filter((t) => {
-                      if (!histQ) return true;
-                      const matchTitle = t.title.toLowerCase().includes(histQ) || (histNormQ && normalizeForSearch(t.title).includes(histNormQ));
-                      const matchAdmin = t.openedByName && (t.openedByName.toLowerCase().includes(histQ) || (histNormQ && normalizeForSearch(t.openedByName).includes(histNormQ)));
-                      const matchItems = t.items.some((it) => it.productName.toLowerCase().includes(histQ) || (histNormQ && normalizeForSearch(it.productName).includes(histNormQ)));
-                      return matchTitle || matchAdmin || matchItems;
-                    });
 
-                    if (filteredRelatedTabs.length === 0 && !histQ && relatedTabs.length === 0) return null;
-
-                    return (
-                      <div>
-                        <div className="flex items-center justify-between mb-2">
-                          <h4 className="font-bold text-xs text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                            <Gamepad2 className="w-3.5 h-3.5 text-[#2596BE]" />
-                            <span>میزها و دستگاه‌های مرتبط ({filteredRelatedTabs.length}):</span>
-                          </h4>
-                          <span className="text-[10px] text-slate-400">کلیک روی هر مورد برای مشاهده جزئیات</span>
-                        </div>
-                        {filteredRelatedTabs.length === 0 ? (
-                          <div className="py-3 text-center text-xs text-slate-400 bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-800">
-                            میزی مطابق با جستجوی شما یافت نشد.
-                          </div>
-                        ) : (
-                          <div className="space-y-1.5">
-                            {filteredRelatedTabs.map((t) => (
-                              <div
-                                key={t.id}
-                                onClick={() => setSelectedHistoryTab(t)}
-                                className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs hover:border-[#2596BE] hover:bg-slate-100/70 dark:hover:bg-slate-800/60 cursor-pointer transition-all group"
-                                title="مشاهده جزئیات کامل میز، بازی و اقلام"
-                              >
-                                <div className="flex items-center gap-2">
-                                  <span className="font-bold text-slate-800 dark:text-slate-200 group-hover:text-[#2596BE] transition-colors">{t.title}</span>
-                                  {t.openedByName && (
-                                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-sky-50 dark:bg-sky-950 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 flex items-center gap-1">
-                                      <UserCheck className="w-2.5 h-2.5" />
-                                      <span>{t.openedByName}</span>
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-slate-500 font-mono">
-                                    {formatToman(t.totalAmount)} تومان ({t.status === 'open' ? 'درحال بازی' : 'تسویه شده'})
-                                  </span>
-                                  <Eye className="w-3.5 h-3.5 text-slate-400 group-hover:text-[#2596BE] transition-colors" />
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()}
-
-                  {/* Person Transaction History */}
-                  {(() => {
-                    const histQ = customerHistorySearch.trim().toLowerCase();
-                    const histNormQ = normalizeForSearch(customerHistorySearch);
                     const filteredPersonTx = personTx.filter((tx) => {
-                      if (!histQ) return true;
-                      const matchDesc = tx.description?.toLowerCase().includes(histQ) || (histNormQ && normalizeForSearch(tx.description).includes(histNormQ));
-                      const matchAmount = tx.amount.toString().includes(histQ);
-                      const matchAccount = (tx.toAccountName && tx.toAccountName.toLowerCase().includes(histQ)) || (tx.fromAccountName && tx.fromAccountName.toLowerCase().includes(histQ));
-                      const matchAdmin = tx.createdBy && (tx.createdBy.toLowerCase().includes(histQ) || (histNormQ && normalizeForSearch(tx.createdBy).includes(histNormQ)));
-                      const matchMethod = tx.paymentMethod && tx.paymentMethod.toLowerCase().includes(histQ);
-                      const matchItems = tx.receiptItems?.some((it) => it.productName.toLowerCase().includes(histQ) || (histNormQ && normalizeForSearch(it.productName).includes(histNormQ)));
-                      return matchDesc || matchAmount || matchAccount || matchAdmin || matchMethod || matchItems;
+                      // Text search
+                      if (histQ) {
+                        const matchDesc = tx.description?.toLowerCase().includes(histQ) || (histNormQ && normalizeForSearch(tx.description || '').includes(histNormQ));
+                        const matchAmount = tx.amount.toString().includes(histQ);
+                        const matchAccount = (tx.toAccountName && tx.toAccountName.toLowerCase().includes(histQ)) || (tx.fromAccountName && tx.fromAccountName.toLowerCase().includes(histQ));
+                        const matchAdmin = tx.createdBy && (tx.createdBy.toLowerCase().includes(histQ) || (histNormQ && normalizeForSearch(tx.createdBy).includes(histNormQ)));
+                        const matchMethod = tx.paymentMethod && tx.paymentMethod.toLowerCase().includes(histQ);
+                        const matchItems = tx.receiptItems?.some((it) => it.productName.toLowerCase().includes(histQ) || (histNormQ && normalizeForSearch(it.productName).includes(histNormQ)));
+                        if (!matchDesc && !matchAmount && !matchAccount && !matchAdmin && !matchMethod && !matchItems) return false;
+                      }
+
+                      // Date filter
+                      if (historyDateFilter !== 'all') {
+                        const txDate = new Date(tx.date);
+                        if (historyDateFilter === 'today') {
+                          const todayStr = getJalaliDateString();
+                          const txDateStr = getJalaliDateString(txDate);
+                          if (todayStr !== txDateStr) return false;
+                        } else if (historyDateFilter === 'week') {
+                          const weekAgo = new Date(Date.now() - 7 * 86400000);
+                          if (txDate < weekAgo) return false;
+                        } else if (historyDateFilter === 'month') {
+                          const monthAgo = new Date(Date.now() - 30 * 86400000);
+                          if (txDate < monthAgo) return false;
+                        }
+                      }
+
+                      // Type filter
+                      if (historyTypeFilter !== 'all') {
+                        const meta = getTransactionMeta(tx);
+                        if (historyTypeFilter === 'credit') {
+                          if (meta.kind !== 'credit') return false;
+                        } else if (historyTypeFilter === 'income') {
+                          if (meta.kind !== 'income') return false;
+                        } else if (historyTypeFilter === 'wallet') {
+                          if (meta.kind !== 'wallet_charge' && meta.kind !== 'wallet_deduct') return false;
+                        } else if (historyTypeFilter === 'collection') {
+                          if (meta.kind !== 'receivable_collection' && meta.kind !== 'debt_settlement') return false;
+                        }
+                      }
+
+                      return true;
                     });
 
                     return (
-                      <div>
-                        <div className="flex items-center justify-between mb-2">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
                           <h4 className="font-bold text-xs text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
                             <Receipt className="w-3.5 h-3.5 text-[#2596BE]" />
-                            <span>ریز تراکنش‌ها و سوابق مالی ({filteredPersonTx.length}):</span>
+                            <span>ریز تراکنش‌ها و پرونده مالی ({filteredPersonTx.length}):</span>
                           </h4>
-                          <span className="text-[10px] text-slate-400">برای جزئیات تسویه، ادمین و اقلام کلیک کنید</span>
+                          <span className="text-[10px] text-slate-400">کلیک روی هر مورد برای مشاهده جزئیات فاکتور و اقلام</span>
                         </div>
+
                         {filteredPersonTx.length === 0 ? (
-                          <div className="py-6 text-center text-xs text-slate-400 border border-dashed rounded-xl border-slate-200 dark:border-slate-800">
-                            {histQ ? 'تراکنشی مطابق با جستجوی شما یافت نشد.' : 'گردش مالی ثبت‌شده‌ای برای این شخص وجود ندارد.'}
+                          <div className="py-8 text-center text-xs text-slate-400 border border-dashed rounded-2xl border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30">
+                            {histQ || historyDateFilter !== 'all' || historyTypeFilter !== 'all'
+                              ? 'موردی مطابق با فیلترهای انتخابی یافت نشد.'
+                              : 'گردش مالی یا فاکتوری برای این شخص ثبت نشده است.'}
                           </div>
                         ) : (
-                          <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden max-h-60 overflow-y-auto">
-                            <table className="w-full text-right text-xs">
-                              <thead className="sticky top-0 bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 text-slate-500 font-semibold z-10">
-                                <tr>
-                                  <th className="py-2 px-3">روش / نوع</th>
-                                  <th className="py-2 px-3">شرح</th>
-                                  <th className="py-2 px-3">مبلغ (تومان)</th>
-                                  <th className="py-2 px-3">ادمین</th>
-                                  <th className="py-2 px-3">صندوق / حساب</th>
-                                  <th className="py-2 px-3">تاریخ</th>
-                                  <th className="py-2 px-2 text-center">جزئیات</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                                {filteredPersonTx.map((tx) => {
-                                  const isCredit = tx.paymentMethod === 'credit' || tx.isCredit || (!tx.toAccountId && (tx.description?.includes('نسیه') || tx.description?.includes('[نسیه]')));
-                                  const isWallet = tx.paymentMethod === 'wallet';
-                                  const isSplit = tx.paymentMethod === 'split';
+                          <div className="space-y-2 max-h-[380px] overflow-y-auto pr-0.5">
+                            {filteredPersonTx.map((tx) => {
+                              const meta = getTransactionMeta(tx);
+                              const methodBadge = getPaymentMethodBadge(tx.paymentMethod, tx.isCredit);
 
-                                  return (
-                                    <tr
-                                      key={tx.id}
-                                      onClick={() => setSelectedHistoryTx(tx)}
-                                      className="hover:bg-slate-100/70 dark:hover:bg-slate-800/60 cursor-pointer transition-colors group"
-                                      title="کلیک برای مشاهده جزئیات فاکتور، روش تسویه و اقلام"
-                                    >
-                                      <td className="py-2 px-3 whitespace-nowrap">
-                                        {isCredit ? (
-                                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-800">
-                                            نسیه (بدهی)
-                                          </span>
-                                        ) : isWallet ? (
-                                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-50 dark:bg-purple-950 text-purple-700 dark:text-purple-400 border border-purple-300 dark:border-purple-800">
-                                            کیف پول
-                                          </span>
-                                        ) : isSplit ? (
-                                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-400 border border-blue-300 dark:border-blue-800">
-                                            ترکیبی
-                                          </span>
-                                        ) : tx.type === 'income' || tx.type === 'receivable_collection' ? (
-                                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-800">
-                                            {tx.paymentMethod === 'pos' ? 'کارتخوان' : tx.paymentMethod === 'cash' ? 'نقدی' : 'تسویه / وصول'}
-                                          </span>
-                                        ) : (
-                                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-50 dark:bg-rose-950 text-rose-700 dark:text-rose-400 border border-rose-300 dark:border-rose-800">
-                                            برداشت / هزینه
-                                          </span>
-                                        )}
-                                      </td>
-                                      <td className="py-2 px-3 text-slate-800 dark:text-slate-200 truncate max-w-xs group-hover:text-[#2596BE] transition-colors">
-                                        {tx.description}
-                                      </td>
-                                      <td className="py-2 px-3 font-bold tabular-nums whitespace-nowrap">
-                                        <span className={isCredit ? 'text-amber-600 dark:text-amber-400' : tx.type === 'income' || tx.type === 'receivable_collection' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>
-                                          {formatToman(tx.amount)}
+                              return (
+                                <div
+                                  key={tx.id}
+                                  onClick={() => setSelectedHistoryTx(tx)}
+                                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 rounded-2xl bg-slate-50 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 text-xs hover:border-[#2596BE] hover:bg-slate-100/80 dark:hover:bg-slate-800/60 cursor-pointer transition-all group shadow-2xs"
+                                  title="کلیک برای مشاهده جزئیات کامل، اقلام و اطلاعات پرداخت"
+                                >
+                                  {/* Right side: Icon, Description, Tags, Operator */}
+                                  <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1">
+                                    <div className="w-8 h-8 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center shrink-0 text-[#2596BE] group-hover:scale-105 transition-transform mt-0.5 sm:mt-0">
+                                      {tx.receiptItems && tx.receiptItems.length > 0 ? (
+                                        <Gamepad2 className="w-4 h-4" />
+                                      ) : meta.kind === 'wallet_charge' || meta.kind === 'wallet_deduct' ? (
+                                        <Wallet className="w-4 h-4" />
+                                      ) : (
+                                        <Receipt className="w-4 h-4" />
+                                      )}
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="font-bold text-slate-800 dark:text-slate-200 group-hover:text-[#2596BE] transition-colors truncate max-w-[260px] sm:max-w-md block">
+                                          {tx.description}
                                         </span>
-                                      </td>
-                                      <td className="py-2 px-3 text-slate-500 whitespace-nowrap text-[11px]">
-                                        {tx.createdBy || 'اپراتور'}
-                                      </td>
-                                      <td className="py-2 px-3 text-slate-500 whitespace-nowrap">
-                                        {tx.toAccountName || tx.fromAccountName || '-'}
-                                      </td>
-                                      <td className="py-2 px-3 font-mono text-[11px] text-slate-400 whitespace-nowrap">
-                                        {formatJalaliReadable(tx.date, false)}
-                                      </td>
-                                      <td className="py-2 px-2 text-center">
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            setSelectedHistoryTx(tx);
-                                          }}
-                                          className="p-1 rounded-md text-slate-400 hover:text-[#2596BE] hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-                                          title="مشاهده جزئیات فاکتور"
-                                        >
-                                          <Eye className="w-3.5 h-3.5" />
-                                        </button>
-                                      </td>
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
+                                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${meta.badgeClass}`}>
+                                          {meta.label}
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-1 flex-wrap">
+                                        <span className="font-mono">{formatJalaliReadable(tx.date, true)}</span>
+                                        {tx.createdBy && (
+                                          <>
+                                            <span aria-hidden="true">•</span>
+                                            <span className="flex items-center gap-0.5 text-slate-500 dark:text-slate-400">
+                                              <UserCheck className="w-3 h-3 text-[#2596BE]" />
+                                              <span>ادمین: {tx.createdBy}</span>
+                                            </span>
+                                          </>
+                                        )}
+                                        {tx.toAccountName && (
+                                          <>
+                                            <span aria-hidden="true">•</span>
+                                            <span>حساب: {tx.toAccountName}</span>
+                                          </>
+                                        )}
+                                        {tx.receiptItems && tx.receiptItems.length > 0 && (
+                                          <>
+                                            <span aria-hidden="true">•</span>
+                                            <span className="text-slate-500">
+                                              {tx.receiptItems.length} قلم کالا
+                                            </span>
+                                          </>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* Left side: Method badge, Amount in Toman, Eye icon */}
+                                  <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-200/60 dark:border-slate-800">
+                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-lg border ${methodBadge.badgeClass}`}>
+                                      {methodBadge.label}
+                                    </span>
+                                    <div className="text-left font-black tabular-nums text-sm">
+                                      <span className={meta.amountClass}>
+                                        {formatToman(tx.amount)}
+                                      </span>
+                                      <span className="text-[10px] text-slate-400 font-normal mr-1">تومان</span>
+                                    </div>
+                                    <Eye className="w-4 h-4 text-slate-400 group-hover:text-[#2596BE] transition-colors shrink-0" />
+                                  </div>
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                       </div>

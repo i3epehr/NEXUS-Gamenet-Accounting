@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Gamepad2,
   Clock,
@@ -41,6 +41,8 @@ import {
   ChevronRight,
   Coins,
   Layers,
+  LayoutGrid,
+  List,
 } from 'lucide-react';
 import {
   Account,
@@ -53,7 +55,16 @@ import {
   Reservation,
   Transaction,
 } from '../types/index.ts';
-import { formatJalaliReadable, formatToman, getJalaliDateString, normalizeDigits, parseTomanInput } from '../utils/jalali.ts';
+import {
+  formatJalaliReadable,
+  formatToman,
+  getJalaliDateString,
+  normalizeDigits,
+  parseTomanInput,
+  normalizeForSearch,
+  getDateRangeBounds,
+} from '../utils/jalali.ts';
+import { getPaymentMethodBadge } from '../utils/transactions.ts';
 import { ConfirmModal } from './ConfirmModal.tsx';
 import { useLockBodyScroll } from '../utils/useLockBodyScroll.ts';
 import { api } from '../services/api.ts';
@@ -202,9 +213,13 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
   const [checkoutWithReceipt, setCheckoutWithReceipt] = useState(false);
   const [creditLimitWarning, setCreditLimitWarning] = useState<string | null>(null);
 
-  // Closed Desks Pagination State
+  // Closed Desks Pagination, View Mode & Filter States
   const [closedTabsPage, setClosedTabsPage] = useState<number>(1);
-  const closedTabsPageSize = 6;
+  const [closedTabsPageSize, setClosedTabsPageSize] = useState<number>(6);
+  const [closedTabsViewMode, setClosedTabsViewMode] = useState<'grid' | 'table'>('grid');
+  const [closedTabsDateRange, setClosedTabsDateRange] = useState<'all' | 'today' | 'yesterday' | 'week' | 'month' | 'custom'>('all');
+  const [closedTabsCustomDate, setClosedTabsCustomDate] = useState<string>(() => getJalaliDateString());
+  const [closedTabsSearch, setClosedTabsSearch] = useState<string>('');
 
   // Micro-loading button feedback states
   const [isStartingTab, setIsStartingTab] = useState(false);
@@ -957,6 +972,65 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
 
   const openTabsList = tabs.filter((t) => t.status === 'open');
   const closedTabsList = tabs.filter((t) => t.status === 'closed');
+
+  // Filtered closed tabs by date preset, custom date, and search
+  const filteredClosedTabsList = useMemo(() => {
+    let list = closedTabsList;
+
+    // Date Range Filter
+    if (closedTabsDateRange !== 'all') {
+      if (closedTabsDateRange === 'today') {
+        const todayStr = getJalaliDateString();
+        list = list.filter((ct) => {
+          const dStr = getJalaliDateString(new Date(ct.closedAt || ct.updatedAt || ct.createdAt));
+          return dStr === todayStr;
+        });
+      } else if (closedTabsDateRange === 'yesterday') {
+        const yest = new Date(Date.now() - 86400000);
+        const yestStr = getJalaliDateString(yest);
+        list = list.filter((ct) => {
+          const dStr = getJalaliDateString(new Date(ct.closedAt || ct.updatedAt || ct.createdAt));
+          return dStr === yestStr;
+        });
+      } else if (closedTabsDateRange === 'week') {
+        const bounds = getDateRangeBounds('week');
+        list = list.filter((ct) => {
+          const d = new Date(ct.closedAt || ct.updatedAt || ct.createdAt);
+          return d >= bounds.from && d <= bounds.to;
+        });
+      } else if (closedTabsDateRange === 'month') {
+        const bounds = getDateRangeBounds('month');
+        list = list.filter((ct) => {
+          const d = new Date(ct.closedAt || ct.updatedAt || ct.createdAt);
+          return d >= bounds.from && d <= bounds.to;
+        });
+      } else if (closedTabsDateRange === 'custom') {
+        if (closedTabsCustomDate.trim()) {
+          list = list.filter((ct) => {
+            const dStr = getJalaliDateString(new Date(ct.closedAt || ct.updatedAt || ct.createdAt));
+            return dStr === closedTabsCustomDate.trim();
+          });
+        }
+      }
+    }
+
+    // Search filter
+    if (closedTabsSearch.trim()) {
+      const q = closedTabsSearch.trim().toLowerCase();
+      const normQ = normalizeForSearch(closedTabsSearch);
+      list = list.filter((ct) => {
+        const matchTitle = ct.title.toLowerCase().includes(q) || normalizeForSearch(ct.title).includes(normQ);
+        const matchPerson = ct.personName && (ct.personName.toLowerCase().includes(q) || normalizeForSearch(ct.personName).includes(normQ));
+        const matchAdmin = ct.openedByName && (ct.openedByName.toLowerCase().includes(q) || normalizeForSearch(ct.openedByName).includes(normQ));
+        const matchItem = ct.items.some(
+          (i) => i.productName.toLowerCase().includes(q) || normalizeForSearch(i.productName).includes(normQ)
+        );
+        return matchTitle || matchPerson || matchAdmin || matchItem;
+      });
+    }
+
+    return list;
+  }, [closedTabsList, closedTabsDateRange, closedTabsCustomDate, closedTabsSearch]);
   const activeReservations = reservations.filter((r) => r.status !== 'cancelled');
 
   const todayJalali = getJalaliDateString();
@@ -1305,118 +1379,322 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
 
           {/* Closed / Previous Desks Section */}
           {closedTabsList.length > 0 && (() => {
-            const totalClosedTabsPages = Math.max(1, Math.ceil(closedTabsList.length / closedTabsPageSize));
+            const effectivePageSize = closedTabsPageSize >= 1000 ? Math.max(1, filteredClosedTabsList.length) : closedTabsPageSize;
+            const totalClosedTabsPages = Math.max(1, Math.ceil(filteredClosedTabsList.length / effectivePageSize));
             const currentPageValid = Math.min(closedTabsPage, totalClosedTabsPages);
-            const paginatedClosedTabs = closedTabsList.slice(
-              (currentPageValid - 1) * closedTabsPageSize,
-              currentPageValid * closedTabsPageSize
+            const paginatedClosedTabs = filteredClosedTabsList.slice(
+              (currentPageValid - 1) * effectivePageSize,
+              currentPageValid * effectivePageSize
             );
 
             return (
               <div className="pt-6 border-t border-slate-200 dark:border-slate-800 space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                {/* Header & View Mode Switcher */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
                     <History className="w-5 h-5 text-[#2596BE]" />
                     <h2 className="text-base font-black text-slate-900 dark:text-white">
-                      میزها و فاکتورهای تسویه شده قبلی ({closedTabsList.length})
+                      میزها و فاکتورهای تسویه شده قبلی ({filteredClosedTabsList.length})
                     </h2>
                   </div>
-                  <p className="text-xs text-slate-400">
-                    جهت اصلاح، حذف یا بازگشایی مجدد میزهایی که قبلا تسویه شده‌اند
-                  </p>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-xs text-slate-400 hidden sm:inline">حالت نمایش:</span>
+                    <div className="flex items-center p-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                      <button
+                        type="button"
+                        onClick={() => setClosedTabsViewMode('grid')}
+                        className={`p-1.5 rounded-md text-xs cursor-pointer transition-all ${
+                          closedTabsViewMode === 'grid'
+                            ? 'bg-white dark:bg-slate-900 text-[#2596BE] shadow-xs font-bold'
+                            : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                        }`}
+                        title="نمای کارتی جمع‌وجور"
+                      >
+                        <LayoutGrid className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setClosedTabsViewMode('table')}
+                        className={`p-1.5 rounded-md text-xs cursor-pointer transition-all ${
+                          closedTabsViewMode === 'table'
+                            ? 'bg-white dark:bg-slate-900 text-[#2596BE] shadow-xs font-bold'
+                            : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                        }`}
+                        title="نمای جدولی فشرده"
+                      >
+                        <List className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {paginatedClosedTabs.map((ct) => {
-                    const tx = transactions?.find(
-                      (t) => (ct.checkoutTransactionId && t.id === ct.checkoutTransactionId) || t.tabId === ct.id
-                    );
-                    const method = ct.checkoutPaymentMethod || tx?.paymentMethod;
-                    const accName = ct.checkoutAccountName || tx?.toAccountName;
+                {/* Filter Toolbar (Search, Date Filter, Page Size) */}
+                <div className="p-3 rounded-2xl bg-slate-50/70 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
+                  <div className="flex flex-wrap items-center gap-2 flex-1">
+                    {/* Search box */}
+                    <div className="relative min-w-[200px] flex-1 max-w-sm">
+                      <input
+                        type="text"
+                        value={closedTabsSearch}
+                        onChange={(e) => {
+                          setClosedTabsSearch(e.target.value);
+                          setClosedTabsPage(1);
+                        }}
+                        placeholder="جستجو در نام میز، مشتری، ادمین یا اقلام..."
+                        className="w-full pl-7 pr-8 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs focus:ring-2 focus:ring-[#2596BE]/40 outline-none"
+                      />
+                      <Search className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2" />
+                      {closedTabsSearch && (
+                        <button
+                          type="button"
+                          onClick={() => setClosedTabsSearch('')}
+                          className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 absolute left-2 top-1/2 -translate-y-1/2 cursor-pointer"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
 
-                    const isCredit = method === 'credit' || tx?.isCredit || tx?.description?.includes('[نسیه]');
-                    const isWallet = method === 'wallet';
-                    const isSplit = method === 'split';
-                    const isCash = method === 'cash';
-
-                    return (
-                      <div
-                        key={ct.id}
-                        className="rounded-2xl bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 p-4 space-y-3 shadow-xs hover:border-slate-300 dark:hover:border-slate-700 transition-all"
+                    {/* Date Preset Filter */}
+                    <div className="flex items-center gap-1.5">
+                      <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                      <select
+                        value={closedTabsDateRange}
+                        onChange={(e) => {
+                          setClosedTabsDateRange(e.target.value as any);
+                          setClosedTabsPage(1);
+                        }}
+                        className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 text-xs font-medium focus:ring-2 focus:ring-[#2596BE]/40 outline-none"
                       >
-                        <div className="flex items-start justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
-                          <div>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="w-2 h-2 rounded-full bg-slate-400 shrink-0"></span>
-                              <h3 className="font-bold text-sm text-slate-800 dark:text-slate-200">{ct.title}</h3>
-                              {ct.openedByName && (
-                                <span
-                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shrink-0"
-                                  title={`بازگشایی میز توسط ${ct.openedByName}`}
-                                >
-                                  <UserCheck className="w-2.5 h-2.5 text-[#2596BE] shrink-0" />
-                                  <span>{ct.openedByName}</span>
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-1 font-mono">
-                              <Clock className="w-3 h-3" />
-                              <span>{formatJalaliReadable(ct.startedAt, false)}</span>
-                              {ct.personName && (
-                                <span className="text-[#2596BE] font-sans font-medium">مشتری: {ct.personName}</span>
-                              )}
-                            </div>
-                          </div>
+                        <option value="all">همه تاریخ‌ها</option>
+                        <option value="today">امروز</option>
+                        <option value="yesterday">دیروز</option>
+                        <option value="week">هفته جاری</option>
+                        <option value="month">ماه جاری</option>
+                        <option value="custom">تاریخ روز انتخابی</option>
+                      </select>
+                    </div>
 
-                          {/* Settlement Method & Account Badge */}
-                          {ct.smartLaunchSettled ? (
-                            <div className="flex flex-col items-end gap-1 shrink-0">
-                              <span className="text-[10px] px-2 py-0.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/80 font-bold flex items-center gap-1">
-                                <Gamepad2 className="w-3 h-3" />
-                                <span>اسمارت‌لانچ</span>
-                              </span>
-                            </div>
-                          ) : (
-                            <div className="flex flex-col items-end gap-1 shrink-0">
-                              <span
-                                className={`text-[10px] px-2 py-0.5 rounded-md font-bold flex items-center gap-1 border ${
-                                  isCredit
-                                    ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/30'
-                                    : isWallet
-                                    ? 'bg-purple-500/15 text-purple-700 dark:text-purple-400 border-purple-500/30'
-                                    : isSplit
-                                    ? 'bg-blue-500/15 text-blue-700 dark:text-blue-400 border-blue-500/30'
-                                    : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
-                                }`}
-                              >
-                                {isCredit ? (
-                                  <>
-                                    <Clock className="w-2.5 h-2.5" />
-                                    <span>نسیه</span>
-                                  </>
-                                ) : isWallet ? (
-                                  <>
-                                    <Wallet className="w-2.5 h-2.5" />
-                                    <span>کیف پول</span>
-                                  </>
-                                ) : isSplit ? (
-                                  <>
-                                    <Layers className="w-2.5 h-2.5" />
-                                    <span>ترکیبی</span>
-                                  </>
-                                ) : isCash ? (
-                                  <>
-                                    <Coins className="w-2.5 h-2.5" />
-                                    <span>نقدی</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <CreditCard className="w-2.5 h-2.5" />
-                                    <span>کارتخوان</span>
-                                  </>
+                    {/* Custom Day Input */}
+                    {closedTabsDateRange === 'custom' && (
+                      <input
+                        type="text"
+                        value={closedTabsCustomDate}
+                        onChange={(e) => {
+                          setClosedTabsCustomDate(normalizeDigits(e.target.value));
+                          setClosedTabsPage(1);
+                        }}
+                        placeholder="1404/08/25"
+                        className="w-28 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs font-mono text-center outline-none focus:ring-2 focus:ring-[#2596BE]"
+                      />
+                    )}
+                  </div>
+
+                  {/* Page Size Selector */}
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-slate-400 text-[11px]">تعداد نمایش:</span>
+                    <select
+                      value={closedTabsPageSize}
+                      onChange={(e) => {
+                        setClosedTabsPageSize(Number(e.target.value));
+                        setClosedTabsPage(1);
+                      }}
+                      className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 text-xs font-medium focus:ring-2 focus:ring-[#2596BE]/40 outline-none"
+                    >
+                      <option value={6}>۶ مورد</option>
+                      <option value={12}>۱۲ مورد</option>
+                      <option value={24}>۲۴ مورد</option>
+                      <option value={48}>۴۸ مورد</option>
+                      <option value={1000}>همه فاکتورها</option>
+                    </select>
+
+                    {(closedTabsSearch || closedTabsDateRange !== 'all') && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setClosedTabsSearch('');
+                          setClosedTabsDateRange('all');
+                          setClosedTabsPage(1);
+                        }}
+                        className="text-[#2596BE] hover:underline text-[11px] font-medium cursor-pointer mr-1"
+                      >
+                        حذف فیلترها
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Empty State */}
+                {filteredClosedTabsList.length === 0 ? (
+                  <div className="py-12 text-center text-xs text-slate-400 bg-white dark:bg-[#111C33] rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 space-y-2">
+                    <History className="w-8 h-8 mx-auto text-slate-300 dark:text-slate-600" />
+                    <p className="font-medium text-slate-600 dark:text-slate-300">
+                      فاکتوری با مشخصات فیلتر شده یافت نشد.
+                    </p>
+                    <p className="text-[11px]">برای مشاهده همه فاکتورها، فیلترهای جستجو یا تاریخ را پاک کنید.</p>
+                  </div>
+                ) : closedTabsViewMode === 'table' ? (
+                  /* ===================== VIEW MODE: COMPACT TABLE ===================== */
+                  <div className="rounded-2xl bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 overflow-hidden shadow-xs">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-right text-xs">
+                        <thead className="bg-slate-50 dark:bg-slate-900/70 border-b border-slate-200 dark:border-slate-800 text-slate-500 font-semibold">
+                          <tr>
+                            <th className="py-2.5 px-3">عنوان میز</th>
+                            <th className="py-2.5 px-3">مشتری</th>
+                            <th className="py-2.5 px-3">تاریخ و زمان تسویه</th>
+                            <th className="py-2.5 px-3">روش و حساب</th>
+                            <th className="py-2.5 px-3">ریز سفارشات و تایم</th>
+                            <th className="py-2.5 px-3">مبلغ کل (تومان)</th>
+                            <th className="py-2.5 px-3 text-left">عملیات</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                          {paginatedClosedTabs.map((ct) => {
+                            const tx = transactions?.find(
+                              (t) => (ct.checkoutTransactionId && t.id === ct.checkoutTransactionId) || t.tabId === ct.id
+                            );
+                            const method = ct.checkoutPaymentMethod || tx?.paymentMethod;
+                            const accName = ct.checkoutAccountName || tx?.toAccountName;
+                            const isSmartLaunch = !!ct.smartLaunchSettled;
+                            const isCredit = method === 'credit' || tx?.isCredit || tx?.description?.includes('[نسیه]');
+                            const methodBadge = getPaymentMethodBadge(method, isCredit, isSmartLaunch);
+
+                            return (
+                              <tr key={ct.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors">
+                                <td className="py-2.5 px-3 whitespace-nowrap">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-bold text-slate-800 dark:text-slate-200">{ct.title}</span>
+                                    {ct.openedByName && (
+                                      <span
+                                        className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
+                                        title={`بازگشایی توسط ${ct.openedByName}`}
+                                      >
+                                        <UserCheck className="w-2.5 h-2.5 text-[#2596BE]" />
+                                        <span>{ct.openedByName}</span>
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+
+                                <td className="py-2.5 px-3 text-slate-700 dark:text-slate-300 whitespace-nowrap font-medium">
+                                  {ct.personName || <span className="text-slate-400">مشتری آزاد</span>}
+                                </td>
+
+                                <td className="py-2.5 px-3 font-mono text-[11px] text-slate-500 whitespace-nowrap">
+                                  {formatJalaliReadable(ct.closedAt || ct.updatedAt || ct.createdAt, true)}
+                                </td>
+
+                                <td className="py-2.5 px-3 whitespace-nowrap">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold border ${methodBadge.badgeClass}`}>
+                                      {methodBadge.label}
+                                    </span>
+                                    {accName && !isCredit && (
+                                      <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                                        ({accName})
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+
+                                <td className="py-2.5 px-3 max-w-xs truncate text-slate-600 dark:text-slate-400">
+                                  {ct.smartLaunchSettled ? (
+                                    <span className="text-indigo-600 dark:text-indigo-400 font-medium">
+                                      تایم: {ct.smartLaunchSettled.durationMinutes} دقیقه ({ct.smartLaunchSettled.smartLaunchId ? `شناسه: ${ct.smartLaunchSettled.smartLaunchId}` : 'اسمارت‌لانچ'})
+                                    </span>
+                                  ) : ct.items.length > 0 ? (
+                                    <span>{ct.items.map((i) => `${i.productName} (${i.quantity})`).join(' + ')}</span>
+                                  ) : (
+                                    <span className="text-slate-400">کرایه کنسول / سیستم</span>
+                                  )}
+                                </td>
+
+                                <td className="py-2.5 px-3 font-black tabular-nums text-slate-900 dark:text-white whitespace-nowrap">
+                                  {formatToman(ct.totalAmount)}
+                                </td>
+
+                                <td className="py-2.5 px-3 text-left whitespace-nowrap">
+                                  <div className="flex items-center justify-end gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => setTabToDelete(ct)}
+                                      className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                                      title="حذف سابقه میز"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                    {onReopenTab && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleReopenClosedTab(ct.id)}
+                                        disabled={reopenLoadingId === ct.id}
+                                        className="px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400 text-[11px] font-bold transition-all flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                        title="بازگشایی مجدد میز برای ادیت و اصلاح اقلام و موجودی"
+                                      >
+                                        <RotateCcw className="w-3 h-3" />
+                                        <span>{reopenLoadingId === ct.id ? '...' : 'بازگشایی و ادیت'}</span>
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  /* ===================== VIEW MODE: CARDS GRID ===================== */
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {paginatedClosedTabs.map((ct) => {
+                      const tx = transactions?.find(
+                        (t) => (ct.checkoutTransactionId && t.id === ct.checkoutTransactionId) || t.tabId === ct.id
+                      );
+                      const method = ct.checkoutPaymentMethod || tx?.paymentMethod;
+                      const accName = ct.checkoutAccountName || tx?.toAccountName;
+
+                      const isSmartLaunch = !!ct.smartLaunchSettled;
+                      const isCredit = method === 'credit' || tx?.isCredit || tx?.description?.includes('[نسیه]');
+                      const methodBadge = getPaymentMethodBadge(method, isCredit, isSmartLaunch);
+
+                      return (
+                        <div
+                          key={ct.id}
+                          className="rounded-2xl bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 p-4 space-y-3 shadow-xs hover:border-slate-300 dark:hover:border-slate-700 transition-all"
+                        >
+                          <div className="flex items-start justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
+                            <div>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="w-2 h-2 rounded-full bg-slate-400 shrink-0"></span>
+                                <h3 className="font-bold text-sm text-slate-800 dark:text-slate-200">{ct.title}</h3>
+                                {ct.openedByName && (
+                                  <span
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 shrink-0"
+                                    title={`بازگشایی میز توسط ${ct.openedByName}`}
+                                  >
+                                    <UserCheck className="w-2.5 h-2.5 text-[#2596BE] shrink-0" />
+                                    <span>{ct.openedByName}</span>
+                                  </span>
                                 )}
+                              </div>
+                              <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-1 font-mono">
+                                <Clock className="w-3 h-3" />
+                                <span>{formatJalaliReadable(ct.closedAt || ct.updatedAt || ct.startedAt, false)}</span>
+                                {ct.personName && (
+                                  <span className="text-[#2596BE] font-sans font-medium">مشتری: {ct.personName}</span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Settlement Method & Account Badge */}
+                            <div className="flex flex-col items-end gap-1 shrink-0">
+                              <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold flex items-center gap-1 border ${methodBadge.badgeClass}`}>
+                                <span>{methodBadge.label}</span>
                               </span>
-                              {accName && !isCredit && (
+                              {accName && !isCredit && !isSmartLaunch && (
                                 <span
                                   className="text-[10px] text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1 font-sans"
                                   title={`حساب / صندوق دریافتی: ${accName}`}
@@ -1426,90 +1704,90 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
                                 </span>
                               )}
                             </div>
-                          )}
-                        </div>
+                          </div>
 
-                        {/* SmartLaunch Gaming Session Info */}
-                        {ct.smartLaunchSettled && (
-                          <div className="p-2 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/50 text-xs space-y-1">
-                            <div className="flex items-center justify-between">
-                              <span className="text-slate-500 dark:text-slate-400">تایم بازی:</span>
-                              <span className="font-bold font-mono text-indigo-700 dark:text-indigo-300">
-                                {ct.smartLaunchSettled.durationMinutes} دقیقه
-                              </span>
-                            </div>
-                            <div className="flex items-center justify-between">
-                              <span className="text-slate-500 dark:text-slate-400">مبلغ کسر در اسمارت‌لانچ:</span>
-                              <span className="font-black font-mono text-emerald-600 dark:text-emerald-400">
-                                {formatToman(ct.smartLaunchSettled.amount)} تومان
-                              </span>
-                            </div>
-                            {ct.smartLaunchSettled.smartLaunchId && (
-                              <div className="flex items-center justify-between text-[11px] pt-1 border-t border-indigo-200/50 dark:border-indigo-800/50">
-                                <span className="text-slate-400">شناسه SmartLaunch:</span>
-                                <span className="font-mono font-bold text-slate-800 dark:text-slate-200">
-                                  {ct.smartLaunchSettled.smartLaunchId}
+                          {/* SmartLaunch Gaming Session Info */}
+                          {ct.smartLaunchSettled && (
+                            <div className="p-2 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/50 text-xs space-y-1">
+                              <div className="flex items-center justify-between">
+                                <span className="text-slate-500 dark:text-slate-400">تایم بازی:</span>
+                                <span className="font-bold font-mono text-indigo-700 dark:text-indigo-300">
+                                  {ct.smartLaunchSettled.durationMinutes} دقیقه
                                 </span>
                               </div>
-                            )}
-                          </div>
-                        )}
+                              <div className="flex items-center justify-between">
+                                <span className="text-slate-500 dark:text-slate-400">مبلغ کسر در اسمارت‌لانچ:</span>
+                                <span className="font-black font-mono text-emerald-600 dark:text-emerald-400">
+                                  {formatToman(ct.smartLaunchSettled.amount)} تومان
+                                </span>
+                              </div>
+                              {ct.smartLaunchSettled.smartLaunchId && (
+                                <div className="flex items-center justify-between text-[11px] pt-1 border-t border-indigo-200/50 dark:border-indigo-800/50">
+                                  <span className="text-slate-400">شناسه SmartLaunch:</span>
+                                  <span className="font-mono font-bold text-slate-800 dark:text-slate-200">
+                                    {ct.smartLaunchSettled.smartLaunchId}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          )}
 
-                        {/* Itemized List */}
-                        <div className="space-y-1.5 text-xs max-h-36 overflow-y-auto">
-                          <span className="text-[11px] text-slate-400 font-medium block">
-                            {ct.items.length > 0 ? 'ریز اقلام ثبت‌شده:' : 'بدون سفارش بوفه'}
-                          </span>
-                          {ct.items.map((it) => (
-                            <div key={it.id} className="flex items-center justify-between py-1 px-2 rounded-lg bg-slate-50 dark:bg-slate-900/60 text-slate-700 dark:text-slate-300">
-                              <span className="truncate">{it.productName} ({it.quantity} عدد)</span>
-                              <span className="font-bold tabular-nums text-slate-900 dark:text-white shrink-0">
-                                {formatToman(it.totalPrice)}
+                          {/* Itemized List */}
+                          <div className="space-y-1.5 text-xs max-h-36 overflow-y-auto">
+                            <span className="text-[11px] text-slate-400 font-medium block">
+                              {ct.items.length > 0 ? 'ریز اقلام ثبت‌شده:' : 'بدون سفارش بوفه'}
+                            </span>
+                            {ct.items.map((it) => (
+                              <div key={it.id} className="flex items-center justify-between py-1 px-2 rounded-lg bg-slate-50 dark:bg-slate-900/60 text-slate-700 dark:text-slate-300">
+                                <span className="truncate">{it.productName} ({it.quantity} عدد)</span>
+                                <span className="font-bold tabular-nums text-slate-900 dark:text-white shrink-0">
+                                  {formatToman(it.totalPrice)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                            <div>
+                              <span className="text-[10px] text-slate-400 block">جمع کل:</span>
+                              <span className="text-sm font-black text-slate-900 dark:text-white tabular-nums">
+                                {formatToman(ct.totalAmount)} تومان
                               </span>
                             </div>
-                          ))}
-                        </div>
-
-                        <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
-                          <div>
-                            <span className="text-[10px] text-slate-400 block">جمع کل:</span>
-                            <span className="text-sm font-black text-slate-900 dark:text-white tabular-nums">
-                              {formatToman(ct.totalAmount)} تومان
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => setTabToDelete(ct)}
-                              className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
-                              title="حذف سابقه میز"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                            {onReopenTab && (
+                            <div className="flex items-center gap-1.5">
                               <button
                                 type="button"
-                                onClick={() => handleReopenClosedTab(ct.id)}
-                                disabled={reopenLoadingId === ct.id}
-                                className="px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                                title="بازگشایی مجدد میز برای ادیت و اصلاح اقلام و موجودی"
+                                onClick={() => setTabToDelete(ct)}
+                                className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                                title="حذف سابقه میز"
                               >
-                                <RotateCcw className="w-3.5 h-3.5" />
-                                <span>{reopenLoadingId === ct.id ? 'در حال بازگشایی...' : 'بازگشایی و ادیت میز'}</span>
+                                <Trash2 className="w-3.5 h-3.5" />
                               </button>
-                            )}
+                              {onReopenTab && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleReopenClosedTab(ct.id)}
+                                  disabled={reopenLoadingId === ct.id}
+                                  className="px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                                  title="بازگشایی مجدد میز برای ادیت و اصلاح اقلام و موجودی"
+                                >
+                                  <RotateCcw className="w-3.5 h-3.5" />
+                                  <span>{reopenLoadingId === ct.id ? 'در حال بازگشایی...' : 'بازگشایی و ادیت میز'}</span>
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
+                )}
 
                 {/* Pagination Controls */}
                 {totalClosedTabsPages > 1 && (
                   <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-slate-200 dark:border-slate-800 text-xs">
                     <span className="text-slate-400">
-                      نمایش {((currentPageValid - 1) * closedTabsPageSize) + 1} تا {Math.min(currentPageValid * closedTabsPageSize, closedTabsList.length)} از {closedTabsList.length} فاکتور تسویه شده
+                      نمایش {((currentPageValid - 1) * effectivePageSize) + 1} تا {Math.min(currentPageValid * effectivePageSize, filteredClosedTabsList.length)} از {filteredClosedTabsList.length} فاکتور تسویه شده
                     </span>
                     <div className="flex items-center gap-1.5">
                       <button
@@ -2721,31 +2999,6 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
                   )}
                 </div>
               )}
-
-              {/* Income Category Selector (رفع باگ کرایه کنسول و امکان انتخاب سرفصل) */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center justify-between">
-                  <span className="flex items-center gap-1.5">
-                    <Tag className="w-3.5 h-3.5 text-[#2596BE]" />
-                    <span>سرفصل درآمد این تسویه</span>
-                  </span>
-                  <span className="text-[10px] text-slate-400 font-normal">تشخیص هوشمند یا تغییر دلخواه</span>
-                </label>
-                <select
-                  value={checkoutCategoryId}
-                  onChange={(e) => setCheckoutCategoryId(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs font-medium focus:ring-2 focus:ring-[#2596BE]"
-                >
-                  <option value="auto">تشخیص هوشمند خودکار بر اساس اقلام و نوع میز</option>
-                  {(categories || [])
-                    .filter((c) => c.type === 'income')
-                    .map((cat) => (
-                      <option key={cat.id} value={cat.id}>
-                        {cat.name} ({cat.sectionLabel || cat.section || 'عمومی'})
-                      </option>
-                    ))}
-                </select>
-              </div>
 
               <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
                 <button

@@ -40,6 +40,8 @@ export interface ReceiptItem {
   quantity: number;
   unitPrice: number;
   totalPrice: number;
+  deductedFromFridge?: number;
+  deductedFromWarehouse?: number;
 }
 
 export interface Transaction {
@@ -57,7 +59,7 @@ export interface Transaction {
   personId?: string;
   personName?: string;
   description: string;
-  paymentMethod?: 'cash' | 'pos' | 'credit' | 'wallet' | 'split';
+  paymentMethod?: 'cash' | 'pos' | 'credit' | 'wallet' | 'split' | 'wallet_charge' | 'wallet_deduct' | string;
   isCredit?: boolean;
   referenceNumber?: string;
   tabId?: string; // Link to OpenTab if created from desk settlement
@@ -156,6 +158,8 @@ export interface OpenTabItem {
   unitPrice: number;
   totalPrice: number;
   addedAt: string;
+  deductedFromFridge?: number;
+  deductedFromWarehouse?: number;
 }
 
 export interface SmartLaunchSettlement {
