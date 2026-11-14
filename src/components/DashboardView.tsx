@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { Account, DashboardStats, GameNetSettings, Transaction } from '../types/index.ts';
 import { formatJalaliReadable, formatToman } from '../utils/jalali.ts';
-import { getTransactionMeta } from '../utils/transactions.ts';
+import { getTransactionMeta, isMixedGamingBuffet } from '../utils/transactions.ts';
 
 interface DashboardViewProps {
   stats: DashboardStats | null;
@@ -403,11 +403,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       {tx.description}
                     </span>
                     {tx.categoryName && (
-                      tx.categoryName.includes('+') ? (
+                      isMixedGamingBuffet(tx) ? (
                         <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-bold bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-500/20 mt-0.5">
-                          <span>🎮 کرایه</span>
+                          <span>کرایه</span>
                           <span className="text-slate-400 font-normal">+</span>
-                          <span className="text-amber-600 dark:text-amber-400">☕ بوفه</span>
+                          <span className="text-amber-600 dark:text-amber-400">بوفه</span>
                         </span>
                       ) : (
                         <span className="text-[10px] text-slate-400 block">{tx.categoryName}</span>
