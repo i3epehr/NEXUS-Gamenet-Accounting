@@ -1775,7 +1775,9 @@ app.post('/api/transactions', (req: Request, res: Response) => {
   if (personId) {
     person = db.persons.find((p) => p.id === personId);
   }
-  if (!person && (req.body.customerName || req.body.personName || req.body.smartLaunchId)) {
+  // Only auto-create if SmartLaunch ID or phone or credit/wallet is used. Do NOT auto-create for walk-in guest names.
+  const hasContactInfo = !!(req.body.smartLaunchId || req.body.customerPhone || req.body.paymentMethod === 'credit' || req.body.paymentMethod === 'wallet');
+  if (!person && hasContactInfo && (req.body.customerName || req.body.personName || req.body.smartLaunchId)) {
     person = findOrCreateCustomer(
       db,
       req.body.customerName || req.body.personName,
@@ -1785,6 +1787,7 @@ app.post('/api/transactions', (req: Request, res: Response) => {
   } else if (person && req.body.smartLaunchId && !person.smartLaunchId) {
     person.smartLaunchId = req.body.smartLaunchId.trim();
   }
+  const effectivePersonName = person?.name || (req.body.customerName || req.body.personName ? String(req.body.customerName || req.body.personName).trim() : undefined);
 
   let category: Category | undefined;
   if (categoryId) {
@@ -1828,7 +1831,7 @@ app.post('/api/transactions', (req: Request, res: Response) => {
     toAccountId: (type === 'income' && paymentMethod !== 'wallet' && paymentMethod !== 'credit') || type === 'receivable_collection' ? targetAccount?.id : undefined,
     toAccountName: (type === 'income' && paymentMethod !== 'wallet' && paymentMethod !== 'credit') || type === 'receivable_collection' ? targetAccount?.name : undefined,
     personId: person?.id,
-    personName: person?.name,
+    personName: effectivePersonName,
     description: description || (type === 'income' ? 'درآمد متفرقه' : 'هزینه متفرقه'),
     paymentMethod: paymentMethod as any,
     isCredit: paymentMethod === 'credit',
@@ -2383,16 +2386,19 @@ function restoreProductStock(
   if (typeof prod.fridgeStock !== 'number' || isNaN(prod.fridgeStock)) {
     prod.fridgeStock = 0;
   }
-  if (
-    exactDeductions &&
-    (exactDeductions.deductedFromFridge !== undefined || exactDeductions.deductedFromWarehouse !== undefined)
-  ) {
-    const fromFridge = Math.max(0, Number(exactDeductions.deductedFromFridge) || 0);
-    const fromWarehouse = Math.max(0, Number(exactDeductions.deductedFromWarehouse) || 0);
+
+  const fromFridge = exactDeductions && typeof exactDeductions.deductedFromFridge === 'number'
+    ? Math.max(0, exactDeductions.deductedFromFridge)
+    : 0;
+  const fromWarehouse = exactDeductions && typeof exactDeductions.deductedFromWarehouse === 'number'
+    ? Math.max(0, exactDeductions.deductedFromWarehouse)
+    : 0;
+
+  if (fromFridge > 0 || fromWarehouse > 0) {
     prod.fridgeStock += fromFridge;
     prod.warehouseStock += fromWarehouse;
   } else {
-    // Priority to fridgeStock (restoring immediate sales items), preserving warehouse stock
+    // Priority to fridgeStock (restoring immediate sales items from counter/fridge)
     prod.fridgeStock += qty;
   }
   prod.stock = Math.max(0, prod.fridgeStock + prod.warehouseStock);
@@ -3237,11 +3243,16 @@ function executeTabCheckout(
   if (finalPersonId) {
     targetPerson = db.persons.find((p) => p.id === finalPersonId);
   }
-  if (!targetPerson && (customerName || smartLaunchId)) {
+  // Only auto-create in db.persons if smartLaunchId or customerPhone or credit is explicitly used
+  const hasContactIdentifier = !!(smartLaunchId || customerPhone || isCredit || paymentMethod === 'credit' || paymentMethod === 'wallet');
+  if (!targetPerson && hasContactIdentifier && (customerName || smartLaunchId)) {
     targetPerson = findOrCreateCustomer(db, customerName, customerPhone, smartLaunchId);
   } else if (targetPerson && smartLaunchId && !targetPerson.smartLaunchId) {
     targetPerson.smartLaunchId = smartLaunchId.trim();
   }
+
+  // Preserve guest name on transaction and tab without polluting db.persons
+  const effectivePersonName = targetPerson?.name || (customerName ? customerName.trim() : tab.personName);
 
   if (targetPerson) {
     if (walletDeducted > 0) {
@@ -3314,96 +3325,62 @@ function executeTabCheckout(
 
   const createdTransactions: Transaction[] = [];
 
-  if (settleScope === 'all' && netGaming > 0 && netBuffet > 0) {
-    // Intelligent Separation: Split gaming revenue and buffet revenue into separate transactions!
-    const txGaming: Transaction = {
-      id: `tx_tab_${Date.now()}_game`,
-      type: 'income',
-      amount: netGaming,
-      date: date || nowIso,
-      jalaliDate: jalaliDate || '',
-      categoryId: gamingCat?.id || 'cat_ps5',
-      categoryName: gamingCat?.name || 'کرایه دستگاه',
-      toAccountId: targetAccount?.id,
-      toAccountName: targetAccount?.name,
-      personId: targetPerson?.id,
-      personName: targetPerson?.name,
-      description: `تسویه تایم/دستگاه ${tab.title}${targetPerson ? ` (${targetPerson.name})` : ''}${paymentNote}`,
-      paymentMethod: paymentMethod,
-      isCredit: isCredit,
-      tabId: tab.id,
-      createdBy: 'اپراتور',
-      createdAt: nowIso,
-    };
+  // Single unified transaction with intelligent mixed category badge
+  const isBoth = settleScope === 'all' && netGaming > 0 && netBuffet > 0;
+  const isBuffetOnly = (netBuffet > 0 && netGaming === 0) || settleScope === 'buffet';
 
-    const buffetReceiptItems = receiptItems.filter((i) => !!i.productId);
-    const txBuffet: Transaction = {
-      id: `tx_tab_${Date.now()}_buf`,
-      type: 'income',
-      amount: netBuffet,
-      date: date || nowIso,
-      jalaliDate: jalaliDate || '',
-      categoryId: buffetCat?.id || 'cat_buffet_inc',
-      categoryName: buffetCat?.name || 'فروش بوفه و کافه',
-      toAccountId: targetAccount?.id,
-      toAccountName: targetAccount?.name,
-      personId: targetPerson?.id,
-      personName: targetPerson?.name,
-      description: `تسویه سفارشات بوفه ${tab.title} (${buffetReceiptItems.map((i) => `${i.productName} × ${i.quantity}`).join(' + ')})${targetPerson ? ` (${targetPerson.name})` : ''}${paymentNote}`,
-      paymentMethod: paymentMethod,
-      isCredit: isCredit,
-      tabId: tab.id,
-      receiptItems: buffetReceiptItems,
-      createdBy: 'اپراتور',
-      createdAt: nowIso,
-    };
-
-    db.transactions.unshift(txBuffet);
-    db.transactions.unshift(txGaming);
-    createdTransactions.push(txGaming, txBuffet);
+  let chosenCatId = '';
+  let chosenCatName = '';
+  if (isBoth) {
+    chosenCatId = gamingCat?.id || 'cat_ps5';
+    chosenCatName = 'کرایه کنسول + بوفه';
+  } else if (isBuffetOnly) {
+    chosenCatId = buffetCat?.id || 'cat_buffet_inc';
+    chosenCatName = buffetCat?.name || 'فروش بوفه و کافه';
   } else {
-    // Single transaction (only buffet, only gaming, or custom scope)
-    const isBuffetOnly = (netBuffet > 0 && netGaming === 0) || settleScope === 'buffet';
-    const chosenCat = isBuffetOnly ? buffetCat : gamingCat;
-
-    let desc = '';
-    if (settleScope === 'buffet') {
-      desc = `تسویه بوفه ${tab.title} (${itemsToSettle.map((i) => `${i.productName} × ${i.quantity}`).join(' + ')})${paymentNote}`;
-    } else if (settleScope === 'custom_amount') {
-      desc = `تسویه علی‌الحساب مبلغ ${finalPayable.toLocaleString('fa-IR')} ت از ${tab.title}${paymentNote}`;
-    } else {
-      const descSuffix = depositDeduction > 0
-        ? ` (کل فاکتور: ${totalAmount.toLocaleString('fa-IR')} ت - کسر بیعانه: ${depositDeduction.toLocaleString('fa-IR')} ت = پرداختی: ${finalPayable.toLocaleString('fa-IR')} ت)`
-        : '';
-      desc = `تسویه ${tab.title}${itemsToSettle.length > 0 ? ` (${itemsToSettle.map((i) => `${i.productName} × ${i.quantity}`).join(' + ')})` : ''}${descSuffix}${paymentNote}`;
-    }
-
-    const tx: Transaction = {
-      id: `tx_tab_${Date.now()}`,
-      type: 'income',
-      amount: finalPayable,
-      date: date || nowIso,
-      jalaliDate: jalaliDate || '',
-      categoryId: chosenCat?.id || 'cat_ps5',
-      categoryName: chosenCat?.name || 'درآمد گیم‌نت',
-      toAccountId: targetAccount?.id,
-      toAccountName: targetAccount?.name,
-      personId: targetPerson?.id,
-      personName: targetPerson?.name,
-      description: desc,
-      paymentMethod: paymentMethod,
-      isCredit: isCredit,
-      tabId: tab.id,
-      receiptItems: itemsToSettle.length > 0 ? receiptItems : undefined,
-      createdBy: 'اپراتور',
-      createdAt: nowIso,
-    };
-
-    db.transactions.unshift(tx);
-    createdTransactions.push(tx);
+    chosenCatId = gamingCat?.id || 'cat_ps5';
+    chosenCatName = gamingCat?.name || 'کرایه دستگاه';
   }
 
-  const tx = createdTransactions[0];
+  // Clean, consistent, and concise description
+  let desc = '';
+  const personDesc = effectivePersonName ? ` (${effectivePersonName})` : '';
+  const depositDesc = depositDeduction > 0 ? ` [کسر بیعانه: ${depositDeduction.toLocaleString('fa-IR')} ت]` : '';
+  const itemsDesc = itemsToSettle.length > 0
+    ? ` [${itemsToSettle.map((i) => `${i.productName} × ${i.quantity}`).join('، ')}]`
+    : '';
+
+  if (settleScope === 'buffet') {
+    desc = `تسویه بوفه ${tab.title}${personDesc}${itemsDesc}${depositDesc}${paymentNote}`;
+  } else if (settleScope === 'custom_amount') {
+    desc = `تسویه علی‌الحساب ${tab.title}${personDesc} [مبلغ: ${finalPayable.toLocaleString('fa-IR')} ت]${paymentNote}`;
+  } else {
+    desc = `تسویه کامل ${tab.title}${personDesc}${itemsDesc}${depositDesc}${paymentNote}`;
+  }
+
+  const tx: Transaction = {
+    id: `tx_tab_${Date.now()}`,
+    type: 'income',
+    amount: finalPayable,
+    date: date || nowIso,
+    jalaliDate: jalaliDate || '',
+    categoryId: chosenCatId,
+    categoryName: chosenCatName,
+    toAccountId: targetAccount?.id,
+    toAccountName: targetAccount?.name,
+    personId: targetPerson?.id,
+    personName: effectivePersonName,
+    description: desc,
+    paymentMethod: paymentMethod,
+    isCredit: isCredit,
+    tabId: tab.id,
+    receiptItems: itemsToSettle.length > 0 ? receiptItems : undefined,
+    createdBy: 'اپراتور',
+    createdAt: nowIso,
+  };
+
+  db.transactions.unshift(tx);
+  createdTransactions.push(tx);
 
   // Tab updates based on scope
   if (settleScope === 'buffet') {
@@ -3693,6 +3670,14 @@ app.post('/api/tabs/:id/reopen', (req: Request, res: Response) => {
           if (item.productId) {
             const prod = db.products.find((p) => p.id === item.productId);
             if (prod) {
+              const fRestored = item.deductedFromFridge || 0;
+              const wRestored = item.deductedFromWarehouse || 0;
+              const locReason = fRestored > 0 && wRestored > 0
+                ? ` (${fRestored} به یخچال + ${wRestored} به انبار)`
+                : fRestored > 0
+                ? ' (به یخچال)'
+                : ' (به انبار)';
+
               restoreProductStock(prod, item.quantity, {
                 deductedFromFridge: item.deductedFromFridge,
                 deductedFromWarehouse: item.deductedFromWarehouse,
@@ -3705,7 +3690,8 @@ app.post('/api/tabs/:id/reopen', (req: Request, res: Response) => {
                 type: 'manual_correction',
                 quantity: item.quantity,
                 costPerUnit: prod.purchasePrice,
-                reason: `بازگشت به یخچال/انبار به علت بازگشایی و اصلاح میز: ${tab.title}`,
+                sourceLocation: fRestored > 0 ? 'fridge' : 'warehouse',
+                reason: `بازگشت به موجودی${locReason} به علت بازگشایی و اصلاح میز: ${tab.title}`,
                 date: new Date().toISOString(),
                 createdAt: new Date().toISOString(),
               });
@@ -3747,6 +3733,11 @@ app.post('/api/tabs/:id/reopen', (req: Request, res: Response) => {
       }
     }
   }
+
+  tab.items.forEach((it) => {
+    it.deductedFromFridge = undefined;
+    it.deductedFromWarehouse = undefined;
+  });
 
   tab.status = 'open';
   tab.closedAt = undefined;
@@ -4686,7 +4677,8 @@ app.post('/api/checkout/unified', (req: AuthedRequest, res: Response) => {
   // Handle payments & accounts
   let targetAccount = db.accounts.find((a) => a.id === accountId);
   let person = personId ? db.persons.find((p) => p.id === personId) : undefined;
-  if (!person && (req.body.customerName || req.body.newCustomerName || req.body.smartLaunchId)) {
+  const hasUnifiedContactInfo = !!(req.body.smartLaunchId || req.body.newCustomerPhone || req.body.customerPhone || paymentMethod === 'credit' || paymentMethod === 'wallet');
+  if (!person && hasUnifiedContactInfo && (req.body.customerName || req.body.newCustomerName || req.body.smartLaunchId)) {
     person = findOrCreateCustomer(
       db,
       req.body.customerName || req.body.newCustomerName,
@@ -4696,6 +4688,8 @@ app.post('/api/checkout/unified', (req: AuthedRequest, res: Response) => {
   } else if (person && req.body.smartLaunchId && !person.smartLaunchId) {
     person.smartLaunchId = req.body.smartLaunchId.trim();
   }
+
+  const effectivePersonName = person?.name || req.body.customerName?.trim() || req.body.newCustomerName?.trim() || undefined;
 
   let walletDeducted = 0;
   let cashOrPosPaid = 0;
@@ -4748,102 +4742,57 @@ app.post('/api/checkout/unified', (req: AuthedRequest, res: Response) => {
   const shouldSplitMixed = (!categoryId || categoryId === 'auto') && gamingTotal > 0 && buffetTotal > 0;
   const createdTxs: Transaction[] = [];
 
-  if (shouldSplitMixed) {
-    const gamingCat = db.categories.find((c) => c.section === 'gaming' || c.id === 'cat_ps5') || db.categories.find((c) => c.type === 'income');
-    const buffetCat = db.categories.find((c) => c.section === 'buffet' || c.id === 'cat_buffet_inc') || db.categories.find((c) => c.type === 'income');
+  const gamingCat = db.categories.find((c) => c.section === 'gaming' || c.id === 'cat_ps5') || db.categories.find((c) => c.type === 'income');
+  const buffetCat = db.categories.find((c) => c.section === 'buffet' || c.id === 'cat_buffet_inc') || db.categories.find((c) => c.type === 'income');
 
-    const txGaming: Transaction = {
-      id: `tx_unified_${Date.now()}_game`,
-      type: 'income',
-      amount: gamingTotal,
-      date: date || nowIso,
-      jalaliDate: jalaliDate || '',
-      categoryId: gamingCat?.id || 'cat_ps5',
-      categoryName: gamingCat?.name || 'درآمد گیم‌نت',
-      toAccountId: targetAccount?.id,
-      toAccountName: targetAccount?.name,
-      personId: person?.id,
-      personName: person?.name,
-      description: `فروش (ساعت گیمینگ): ${gamingItems.map((it) => `${it.name} × ${it.quantity}`).join(' + ')}${person ? ` (${person.name})` : ''}${paymentNote}`,
-      receiptItems: gamingItems.map((it) => ({
-        productId: it.productId,
-        productName: it.name,
-        quantity: Number(it.quantity) || 1,
-        unitPrice: Number(it.unitPrice) || 0,
-        totalPrice: (Number(it.unitPrice) || 0) * (Number(it.quantity) || 1),
-      })),
-      createdBy: 'اپراتور',
-      createdAt: nowIso,
-    };
+  let chosenCat = categoryId && categoryId !== 'auto' ? db.categories.find((c) => c.id === categoryId) : undefined;
+  let chosenCatId = '';
+  let chosenCatName = '';
 
-    const txBuffet: Transaction = {
-      id: `tx_unified_${Date.now()}_buf`,
-      type: 'income',
-      amount: buffetTotal,
-      date: date || nowIso,
-      jalaliDate: jalaliDate || '',
-      categoryId: buffetCat?.id || 'cat_buffet_inc',
-      categoryName: buffetCat?.name || 'فروش بوفه و کافه',
-      toAccountId: targetAccount?.id,
-      toAccountName: targetAccount?.name,
-      personId: person?.id,
-      personName: person?.name,
-      description: `فروش (بوفه و کافه): ${buffetItems.map((it) => `${it.name} × ${it.quantity}`).join(' + ')}${person ? ` (${person.name})` : ''}${paymentNote}`,
-      receiptItems: buffetItems.map((it) => ({
-        productId: it.productId,
-        productName: it.name,
-        quantity: Number(it.quantity) || 1,
-        unitPrice: Number(it.unitPrice) || 0,
-        totalPrice: (Number(it.unitPrice) || 0) * (Number(it.quantity) || 1),
-      })),
-      createdBy: 'اپراتور',
-      createdAt: nowIso,
-    };
-
-    createdTxs.push(txGaming, txBuffet);
+  if (chosenCat) {
+    chosenCatId = chosenCat.id;
+    chosenCatName = chosenCat.name;
+  } else if (shouldSplitMixed) {
+    chosenCatId = gamingCat?.id || 'cat_ps5';
+    chosenCatName = 'کرایه کنسول + بوفه';
+  } else if (buffetTotal > 0 && gamingTotal === 0) {
+    chosenCatId = buffetCat?.id || 'cat_buffet_inc';
+    chosenCatName = buffetCat?.name || 'فروش بوفه و کافه';
   } else {
-    // Explicit single category or single section
-    let cat = categoryId && categoryId !== 'auto' ? db.categories.find((c) => c.id === categoryId) : undefined;
-    if (!cat) {
-      if (gamingTotal > 0 && buffetTotal === 0) {
-        cat = db.categories.find((c) => c.section === 'gaming' || c.id === 'cat_ps5') || db.categories.find((c) => c.type === 'income');
-      } else if (buffetTotal > 0 && gamingTotal === 0) {
-        cat = db.categories.find((c) => c.section === 'buffet' || c.id === 'cat_buffet_inc') || db.categories.find((c) => c.type === 'income');
-      } else {
-        cat = db.categories.find((c) => c.section === 'gaming' || c.section === 'buffet') || db.categories.find((c) => c.type === 'income');
-      }
-    }
-
-    const itemsDesc = items.length > 0
-      ? items.map((it) => `${it.name} × ${it.quantity}`).join(' + ')
-      : 'درآمد متفرقه';
-
-    const txDesc = description && description.trim()
-      ? `${description.trim()}${paymentNote}`
-      : `فروش: ${itemsDesc}${person ? ` (${person.name})` : ''}${paymentNote}`;
-
-    const tx: Transaction = {
-      id: `tx_unified_${Date.now()}`,
-      type: 'income',
-      amount: finalAmount,
-      date: date || nowIso,
-      jalaliDate: jalaliDate || '',
-      categoryId: cat?.id || 'cat_ps5',
-      categoryName: cat?.name || 'درآمد گیم‌نت',
-      toAccountId: targetAccount?.id,
-      toAccountName: targetAccount?.name,
-      personId: person?.id,
-      personName: person?.name,
-      description: txDesc,
-      paymentMethod: paymentMethod,
-      isCredit: paymentMethod === 'credit',
-      receiptItems,
-      createdBy: 'اپراتور',
-      createdAt: nowIso,
-    };
-
-    createdTxs.push(tx);
+    chosenCatId = gamingCat?.id || 'cat_ps5';
+    chosenCatName = gamingCat?.name || 'درآمد گیم‌نت';
   }
+
+  const itemsDesc = items.length > 0
+    ? ` [${items.map((it) => `${it.name} × ${it.quantity}`).join('، ')}]`
+    : '';
+
+  const personDesc = effectivePersonName ? ` (${effectivePersonName})` : '';
+  const txDesc = description && description.trim()
+    ? `${description.trim()}${paymentNote}`
+    : `فروش${personDesc}${itemsDesc}${paymentNote}`;
+
+  const tx: Transaction = {
+    id: `tx_unified_${Date.now()}`,
+    type: 'income',
+    amount: finalAmount,
+    date: date || nowIso,
+    jalaliDate: jalaliDate || '',
+    categoryId: chosenCatId,
+    categoryName: chosenCatName,
+    toAccountId: targetAccount?.id,
+    toAccountName: targetAccount?.name,
+    personId: person?.id,
+    personName: effectivePersonName,
+    description: txDesc,
+    paymentMethod: paymentMethod,
+    isCredit: paymentMethod === 'credit',
+    receiptItems,
+    createdBy: 'اپراتور',
+    createdAt: nowIso,
+  };
+
+  createdTxs.push(tx);
 
   // Primary transaction ID for tab linkage
   const primaryTxId = createdTxs[0].id;
@@ -4856,6 +4805,8 @@ app.post('/api/checkout/unified', (req: AuthedRequest, res: Response) => {
       existing.status = 'closed';
       existing.closedAt = date || nowIso;
       existing.checkoutTransactionId = primaryTxId;
+      existing.checkoutPaymentMethod = paymentMethod;
+      existing.checkoutAccountName = targetAccount?.name;
       existing.totalAmount += finalAmount;
       existing.paidAmount = existing.totalAmount;
       existing.finalAmount = existing.totalAmount;
@@ -4914,7 +4865,7 @@ app.post('/api/checkout/unified', (req: AuthedRequest, res: Response) => {
       id: `tab_quick_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       title: deskTitle,
       personId: person?.id,
-      personName: person?.name,
+      personName: effectivePersonName,
       startedAt: date || nowIso,
       closedAt: date || nowIso,
       status: 'closed',
@@ -4924,6 +4875,8 @@ app.post('/api/checkout/unified', (req: AuthedRequest, res: Response) => {
       discount: 0,
       finalAmount: finalAmount,
       checkoutTransactionId: primaryTxId,
+      checkoutPaymentMethod: paymentMethod,
+      checkoutAccountName: targetAccount?.name,
       openedByUserId: req.authUser?.id,
       openedByName: req.authUser?.fullName || req.authUser?.username,
       createdAt: date || nowIso,

@@ -403,7 +403,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       {tx.description}
                     </span>
                     {tx.categoryName && (
-                      <span className="text-[10px] text-slate-400 block">{tx.categoryName}</span>
+                      tx.categoryName.includes('+') ? (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-bold bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-500/20 mt-0.5">
+                          <span>🎮 کرایه</span>
+                          <span className="text-slate-400 font-normal">+</span>
+                          <span className="text-amber-600 dark:text-amber-400">☕ بوفه</span>
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-slate-400 block">{tx.categoryName}</span>
+                      )
                     )}
                   </td>
                   <td className="py-2.5 px-3 text-slate-600 dark:text-slate-400">

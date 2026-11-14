@@ -118,7 +118,9 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
 
   const [detailPerson, setDetailPerson] = useState<Person | null>(null);
   const [customerHistorySearch, setCustomerHistorySearch] = useState('');
-  const [historyDateFilter, setHistoryDateFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
+  const [historyDateFilter, setHistoryDateFilter] = useState<'all' | 'today' | 'week' | 'month' | 'custom'>('all');
+  const [historyCustomDateFrom, setHistoryCustomDateFrom] = useState('');
+  const [historyCustomDateTo, setHistoryCustomDateTo] = useState('');
   const [historyTypeFilter, setHistoryTypeFilter] = useState<'all' | 'income' | 'credit' | 'wallet' | 'collection'>('all');
   const [selectedHistoryTx, setSelectedHistoryTx] = useState<Transaction | null>(null);
   const [selectedHistoryTab, setSelectedHistoryTab] = useState<OpenTab | null>(null);
@@ -1319,8 +1321,29 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                             <option value="today">امروز</option>
                             <option value="week">۷ روز اخیر</option>
                             <option value="month">۳۰ روز اخیر</option>
+                            <option value="custom">بازه دلخواه</option>
                           </select>
                         </div>
+
+                        {historyDateFilter === 'custom' && (
+                          <div className="flex items-center gap-1.5 text-xs">
+                            <input
+                              type="text"
+                              value={historyCustomDateFrom}
+                              onChange={(e) => setHistoryCustomDateFrom(e.target.value)}
+                              placeholder="از تاریخ (۱۴۰۳/۰۸/۰۱)"
+                              className="w-28 px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-300 text-xs text-center font-mono outline-none focus:ring-2 focus:ring-[#2596BE]/40"
+                            />
+                            <span className="text-slate-400">تا</span>
+                            <input
+                              type="text"
+                              value={historyCustomDateTo}
+                              onChange={(e) => setHistoryCustomDateTo(e.target.value)}
+                              placeholder="تا تاریخ (۱۴۰۳/۰۸/۳۰)"
+                              className="w-28 px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-300 text-xs text-center font-mono outline-none focus:ring-2 focus:ring-[#2596BE]/40"
+                            />
+                          </div>
+                        )}
 
                         {/* Type Filter */}
                         <div className="flex items-center gap-1">
@@ -1385,6 +1408,10 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                         } else if (historyDateFilter === 'month') {
                           const monthAgo = new Date(Date.now() - 30 * 86400000);
                           if (txDate < monthAgo) return false;
+                        } else if (historyDateFilter === 'custom') {
+                          const txJalali = tx.jalaliDate || getJalaliDateString(txDate);
+                          if (historyCustomDateFrom && txJalali < historyCustomDateFrom.trim()) return false;
+                          if (historyCustomDateTo && txJalali > historyCustomDateTo.trim()) return false;
                         }
                       }
 
@@ -1426,6 +1453,20 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                             {filteredPersonTx.map((tx) => {
                               const meta = getTransactionMeta(tx);
                               const methodBadge = getPaymentMethodBadge(tx.paymentMethod, tx.isCredit);
+                              const shortTitle = (() => {
+                                if (tx.tabId || tx.id.startsWith('tx_tab_')) {
+                                  const m = tx.description?.match(/تسویه\s+(?:کامل\s+|بوفه\s+|علی‌الحساب\s+)?(میز\s+[^\(\[\-\s]+|اتاق\s+[^\(\[\-\s]+|سیستم\s+[^\(\[\-\s]+|VIP[^\(\[\-\s]*)/i);
+                                  return m && m[1] ? `فاکتور ${m[1]}` : 'فاکتور میز / گیم‌نت';
+                                }
+                                if (tx.receiptItems && tx.receiptItems.length > 0) return 'خرید بوفه و کافه';
+                                if (meta.kind === 'wallet_charge') return 'شارژ کیف پول';
+                                if (meta.kind === 'wallet_deduct') return 'کسر از حساب';
+                                if (meta.kind === 'receivable_collection') return 'وصول طلب (تسویه نسیه)';
+                                if (meta.kind === 'debt_settlement') return 'تسویه بدهی';
+                                if (meta.kind === 'credit') return 'ثبت نسیه';
+                                if (tx.type === 'expense') return `هزینه: ${tx.categoryName || 'متفرقه'}`;
+                                return tx.categoryName || 'سند مالی';
+                              })();
 
                               return (
                                 <div
@@ -1448,7 +1489,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                                     <div className="min-w-0 flex-1">
                                       <div className="flex items-center gap-2 flex-wrap">
                                         <span className="font-bold text-slate-800 dark:text-slate-200 group-hover:text-[#2596BE] transition-colors truncate max-w-[260px] sm:max-w-md block">
-                                          {tx.description}
+                                          {shortTitle}
                                         </span>
                                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${meta.badgeClass}`}>
                                           {meta.label}

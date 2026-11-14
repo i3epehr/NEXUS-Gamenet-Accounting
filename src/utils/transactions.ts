@@ -160,13 +160,13 @@ export function getPaymentMethodBadge(
       badgeClass: 'bg-blue-500/15 text-blue-700 dark:text-blue-400 border border-blue-500/30',
     };
   }
-  if (method === 'cash') {
+  if (method === 'cash' || method === 'نقدی') {
     return {
       label: 'نقدی',
       badgeClass: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30',
     };
   }
-  if (method === 'pos') {
+  if (method === 'pos' || method === 'کارتخوان') {
     return {
       label: 'کارتخوان',
       badgeClass: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30',
@@ -174,6 +174,6 @@ export function getPaymentMethodBadge(
   }
   return {
     label: 'نقدی / کارتخوان',
-    badgeClass: 'bg-slate-500/15 text-slate-700 dark:text-slate-400 border border-slate-500/30',
+    badgeClass: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30',
   };
 }
