@@ -1539,16 +1539,16 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                                           <span className="text-[10px] text-slate-400 font-normal mr-1">تومان</span>
                                         </div>
                                       </div>
-                                      {/* Running balance up to this transaction */}
+                                      {/* Running balance before this transaction */}
                                       {(() => {
                                         const bal = runningBalanceMap.get(tx.id);
                                         if (bal === undefined) return null;
                                         return (
                                           <span
                                             className="text-[10px] tabular-nums font-semibold flex items-center gap-1 mt-0.5"
-                                            title="مانده حساب شخص پس از ثبت این تراکنش"
+                                            title="مانده حساب شخص قبل از ثبت این تراکنش"
                                           >
-                                            <span className="text-slate-400 font-normal">مانده پس از تراکنش:</span>
+                                            <span className="text-slate-400 font-normal">مانده قبل از این تراکنش:</span>
                                             {bal > 0 ? (
                                               <span className="text-amber-600 dark:text-amber-400 font-bold">
                                                 {formatToman(bal)} ت (بدهکار)
@@ -1737,7 +1737,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                 <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800 space-y-1 sm:col-span-2">
                   <span className="text-[11px] text-slate-400 flex items-center gap-1">
                     <Wallet className="w-3.5 h-3.5 text-[#2596BE]" />
-                    <span>مانده حساب و بدهی شخص پس از این تراکنش:</span>
+                    <span>مانده حساب شخص قبل از این تراکنش:</span>
                   </span>
                   <div className="font-bold text-xs sm:text-sm">
                     {(() => {

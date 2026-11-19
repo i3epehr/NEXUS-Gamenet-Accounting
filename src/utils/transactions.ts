@@ -321,8 +321,8 @@ export function getAccountPersonDeposits(
 }
 
 /**
- * Calculates the running balance for a person's transactions.
- * Returns a map of txId -> balanceAfterTransaction.
+ * Calculates the running balance for a person's transactions BEFORE each transaction took place.
+ * Returns a map of txId -> balanceBeforeTransaction.
  * Working backwards from current balance ensures exact consistency.
  */
 export function calculatePersonRunningBalances(
@@ -335,7 +335,6 @@ export function calculatePersonRunningBalances(
 
   let curBal = personCurrentBalance || 0;
   for (const tx of sorted) {
-    map.set(tx.id, curBal);
     const meta = getTransactionMeta(tx);
     let delta = 0;
     if (meta.kind === 'credit') {
@@ -347,7 +346,9 @@ export function calculatePersonRunningBalances(
     } else {
       delta = 0;
     }
-    curBal = curBal - delta;
+    const balBeforeTx = curBal - delta;
+    map.set(tx.id, balBeforeTx);
+    curBal = balBeforeTx;
   }
   return map;
 }

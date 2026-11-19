@@ -937,7 +937,6 @@ export default function App() {
                 <ReportsView
                   transactions={transactions}
                   settings={settings}
-                  accounts={accounts}
                 />
               )}
 

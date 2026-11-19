@@ -9,6 +9,9 @@ import {
   RefreshCw,
   ChevronRight,
   ChevronLeft,
+  ChevronDown,
+  ChevronUp,
+  Calendar,
   AlertCircle,
   X,
   Loader2,
@@ -18,7 +21,15 @@ import {
   Building,
 } from 'lucide-react';
 import { Account, Category, Person, Transaction, TransactionType } from '../types/index.ts';
-import { formatJalaliReadable, formatToman, normalizeDigits, normalizeForSearch, parseTomanInput } from '../utils/jalali.ts';
+import {
+  formatJalaliReadable,
+  formatToman,
+  normalizeDigits,
+  normalizeForSearch,
+  parseTomanInput,
+  getJalaliDateString,
+  addJalaliDays,
+} from '../utils/jalali.ts';
 import { getTransactionMeta, isMixedGamingBuffet, getAccountPersonDeposits } from '../utils/transactions.ts';
 import { ConfirmModal } from './ConfirmModal.tsx';
 import { useLockBodyScroll } from '../utils/useLockBodyScroll.ts';
@@ -71,6 +82,8 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [isDepositsModalOpen, setIsDepositsModalOpen] = useState(false);
   const [expandedPersonKey, setExpandedPersonKey] = useState<string | null>(null);
+  const [depositDatePreset, setDepositDatePreset] = useState<'today' | 'yesterday' | 'week' | 'month' | 'day' | 'all'>('today');
+  const [depositSelectedDay, setDepositSelectedDay] = useState<string>(() => getJalaliDateString());
 
   // Lock body scroll when editing or deleting modal is open
   useLockBodyScroll(editingTx !== null || txToDelete !== null || isDepositsModalOpen);
@@ -150,10 +163,54 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
     return { cashIn, expense: exp, creditDebt, net: cashIn - exp };
   }, [filteredTransactions]);
 
-  // Inflow deposits into accounts by person based on filtered transactions
+  // Dedicated date filtering for deposits breakdown modal
+  const depositFilteredTxs = useMemo(() => {
+    if (depositDatePreset === 'all') {
+      return transactions;
+    }
+    const todayStr = getJalaliDateString();
+    if (depositDatePreset === 'today') {
+      return transactions.filter((t) => {
+        const jalali = t.jalaliDate || getJalaliDateString(new Date(t.date));
+        return jalali === todayStr;
+      });
+    }
+    if (depositDatePreset === 'yesterday') {
+      const yesterdayStr = addJalaliDays(todayStr, -1);
+      return transactions.filter((t) => {
+        const jalali = t.jalaliDate || getJalaliDateString(new Date(t.date));
+        return jalali === yesterdayStr;
+      });
+    }
+    if (depositDatePreset === 'week') {
+      const weekAgo = new Date(Date.now() - 7 * 86400000);
+      return transactions.filter((t) => new Date(t.date) >= weekAgo);
+    }
+    if (depositDatePreset === 'month') {
+      const monthAgo = new Date(Date.now() - 30 * 86400000);
+      return transactions.filter((t) => new Date(t.date) >= monthAgo);
+    }
+    if (depositDatePreset === 'day') {
+      return transactions.filter((t) => {
+        const jalali = t.jalaliDate || getJalaliDateString(new Date(t.date));
+        return jalali === depositSelectedDay.trim();
+      });
+    }
+    return transactions;
+  }, [transactions, depositDatePreset, depositSelectedDay]);
+
+  // Inflow deposits into accounts by person based on depositFilteredTxs
   const accountDeposits = useMemo(() => {
-    return getAccountPersonDeposits(filteredTransactions, accounts);
-  }, [filteredTransactions, accounts]);
+    return getAccountPersonDeposits(depositFilteredTxs, accounts);
+  }, [depositFilteredTxs, accounts]);
+
+  const totalDepositSum = useMemo(() => {
+    return accountDeposits.reduce((acc, a) => acc + a.totalDeposit, 0);
+  }, [accountDeposits]);
+
+  const totalDepositTxCount = useMemo(() => {
+    return accountDeposits.reduce((acc, a) => acc + a.txCount, 0);
+  }, [accountDeposits]);
 
   // Pagination slice
   const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / pageSize));
@@ -673,7 +730,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
       {/* Account and Person Deposits Breakdown Modal */}
       {isDepositsModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+          <div className="bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[88vh]">
             {/* Header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">
               <div className="flex items-center gap-2.5">
@@ -685,7 +742,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                     تفکیک واریزی اشخاص به صندوق‌ها و کارتخوان‌ها
                   </h3>
                   <p className="text-[11px] text-slate-400 mt-0.5">
-                    بر اساس تراکنش‌های فیلتر شده فعلی ({filteredTransactions.length} تراکنش)
+                    مجموع دریافتی: <strong className="text-emerald-600 dark:text-emerald-400 tabular-nums font-mono font-bold">{formatToman(totalDepositSum)}</strong> تومان ({totalDepositTxCount} تراکنش واریزی)
                   </p>
                 </div>
               </div>
@@ -698,11 +755,113 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
               </button>
             </div>
 
+            {/* Date Filter Toolbar */}
+            <div className="px-5 py-2.5 bg-slate-100/70 dark:bg-slate-900/60 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setDepositDatePreset('today')}
+                  className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                    depositDatePreset === 'today'
+                      ? 'bg-[#2596BE] text-white shadow-xs'
+                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  امروز
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDepositDatePreset('yesterday')}
+                  className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                    depositDatePreset === 'yesterday'
+                      ? 'bg-[#2596BE] text-white shadow-xs'
+                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  دیروز
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDepositDatePreset('week')}
+                  className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                    depositDatePreset === 'week'
+                      ? 'bg-[#2596BE] text-white shadow-xs'
+                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  ۷ روز اخیر
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDepositDatePreset('month')}
+                  className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                    depositDatePreset === 'month'
+                      ? 'bg-[#2596BE] text-white shadow-xs'
+                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  ۳۰ روز اخیر
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDepositDatePreset('day')}
+                  className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                    depositDatePreset === 'day'
+                      ? 'bg-[#2596BE] text-white shadow-xs'
+                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  انتخاب روز
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDepositDatePreset('all')}
+                  className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                    depositDatePreset === 'all'
+                      ? 'bg-[#2596BE] text-white shadow-xs'
+                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  همه تاریخ‌ها
+                </button>
+              </div>
+
+              {depositDatePreset === 'day' && (
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setDepositSelectedDay((prev) => addJalaliDays(prev, -1))}
+                    className="p-1 rounded-lg bg-white dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
+                    title="روز قبل"
+                  >
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                  <div className="flex items-center gap-1 bg-white dark:bg-slate-800 px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700">
+                    <Calendar className="w-3 h-3 text-[#2596BE]" />
+                    <input
+                      type="text"
+                      value={depositSelectedDay}
+                      onChange={(e) => setDepositSelectedDay(e.target.value)}
+                      className="w-20 text-center text-[11px] font-mono font-bold bg-transparent border-none outline-none text-slate-900 dark:text-white"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDepositSelectedDay((prev) => addJalaliDays(prev, 1))}
+                    className="p-1 rounded-lg bg-white dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
+                    title="روز بعد"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+            </div>
+
             {/* Content */}
             <div className="p-5 overflow-y-auto space-y-4 flex-1">
               {accountDeposits.length === 0 ? (
-                <div className="py-10 text-center text-xs text-slate-400">
-                  در لیست تراکنش‌های فیلتر شده، واریزی به صندوقی یافت نشد.
+                <div className="py-12 text-center text-xs text-slate-400">
+                  در این بازه زمانی، واریزی توسط اشخاص به صندوق‌ها یافت نشد.
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -744,26 +903,81 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
 
                         {/* Persons List */}
                         <div className="space-y-2">
-                          {acc.persons.map((p, idx) => (
-                            <div
-                              key={idx}
-                              className="flex items-center justify-between text-xs py-2 px-3 rounded-xl bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700/60"
-                            >
-                              <div className="flex items-center gap-2">
-                                <span className="w-1.5 h-1.5 rounded-full bg-[#2596BE]"></span>
-                                <span className="font-semibold text-slate-800 dark:text-slate-200">
-                                  {p.personName}
-                                </span>
-                                <span className="text-[10px] text-slate-400 font-normal">
-                                  ({p.count} تراکنش)
-                                </span>
+                          {acc.persons.map((p, idx) => {
+                            const personKey = `${acc.accountId}_${p.personName}_${idx}`;
+                            const isExpanded = expandedPersonKey === personKey;
+                            const hasMultiple = p.count > 1;
+
+                            return (
+                              <div
+                                key={idx}
+                                className="rounded-xl bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700/60 overflow-hidden text-xs"
+                              >
+                                <div
+                                  onClick={() => {
+                                    if (hasMultiple) {
+                                      setExpandedPersonKey(isExpanded ? null : personKey);
+                                    }
+                                  }}
+                                  className={`flex items-center justify-between p-2.5 ${hasMultiple ? 'cursor-pointer hover:bg-slate-50/80 dark:hover:bg-slate-700/40' : ''}`}
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-[#2596BE]"></span>
+                                    <span className="font-semibold text-slate-800 dark:text-slate-200">
+                                      {p.personName}
+                                    </span>
+                                    <span className="text-[10px] text-slate-400 font-normal">
+                                      ({p.count} واریز)
+                                    </span>
+                                  </div>
+
+                                  {/* Right side (in RTL, left visually): Time next to Amount */}
+                                  <div className="flex items-center gap-2.5">
+                                    {!hasMultiple && p.transactions[0] && (
+                                      <span className="font-mono text-[11px] text-slate-400 dark:text-slate-500 font-medium">
+                                        {formatJalaliReadable(p.transactions[0].date, true)}
+                                      </span>
+                                    )}
+                                    <div className="text-left font-bold tabular-nums text-slate-900 dark:text-white">
+                                      +{formatToman(p.totalAmount)}
+                                      <span className="text-[10px] font-normal text-slate-400 mr-1">تومان</span>
+                                    </div>
+                                    {hasMultiple && (
+                                      isExpanded ? (
+                                        <ChevronUp className="w-3.5 h-3.5 text-slate-400" />
+                                      ) : (
+                                        <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+                                      )
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Expanded sub-transactions when person deposited more than once */}
+                                {hasMultiple && isExpanded && (
+                                  <div className="px-3 pb-2.5 pt-1 space-y-1 bg-slate-50/50 dark:bg-slate-900/30 border-t border-slate-100 dark:border-slate-700/60 text-[11px]">
+                                    {p.transactions.map((tx) => (
+                                      <div
+                                        key={tx.id}
+                                        className="flex items-center justify-between py-1 px-2 rounded-lg bg-white dark:bg-slate-800/80 border border-slate-100 dark:border-slate-700/40"
+                                      >
+                                        <span className="text-slate-600 dark:text-slate-400 truncate max-w-[200px]">
+                                          {tx.description || 'واریز وجه'}
+                                        </span>
+                                        <div className="flex items-center gap-2.5 shrink-0">
+                                          <span className="font-mono text-slate-400 dark:text-slate-500 text-[10px] font-medium">
+                                            {formatJalaliReadable(tx.date, true)}
+                                          </span>
+                                          <span className="font-bold tabular-nums text-emerald-600 dark:text-emerald-400">
+                                            +{formatToman(tx.amount)} ت
+                                          </span>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
                               </div>
-                              <div className="text-left font-bold tabular-nums text-slate-900 dark:text-white">
-                                {formatToman(p.totalAmount)}
-                                <span className="text-[10px] font-normal text-slate-400 mr-1">تومان</span>
-                              </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     );
@@ -773,7 +987,10 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
             </div>
 
             {/* Footer */}
-            <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 flex justify-end">
+            <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-500">
+                مجموع دریافتی: <span className="text-emerald-600 dark:text-emerald-400 font-mono font-black">{formatToman(totalDepositSum)}</span> تومان
+              </span>
               <button
                 type="button"
                 onClick={() => setIsDepositsModalOpen(false)}
