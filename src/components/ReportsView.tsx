@@ -11,8 +11,14 @@ import {
   X,
   FileCheck,
   Search,
+  Landmark,
+  Wallet,
+  CreditCard,
+  Building,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
-import { GameNetSettings, Transaction } from '../types/index.ts';
+import { Account, GameNetSettings, Transaction } from '../types/index.ts';
 import {
   formatJalaliReadable,
   formatToman,
@@ -23,11 +29,12 @@ import {
   addJalaliDays,
 } from '../utils/jalali.ts';
 import { useLockBodyScroll } from '../utils/useLockBodyScroll.ts';
-import { getTransactionMeta, isMixedGamingBuffet } from '../utils/transactions.ts';
+import { getTransactionMeta, isMixedGamingBuffet, getAccountPersonDeposits } from '../utils/transactions.ts';
 
 interface ReportsViewProps {
   transactions: Transaction[];
   settings: GameNetSettings;
+  accounts?: Account[];
 }
 
 export type RangePresetType =
@@ -37,7 +44,7 @@ export type RangePresetType =
   | 'year'
   | 'custom';
 
-export const ReportsView: React.FC<ReportsViewProps> = ({ transactions, settings }) => {
+export const ReportsView: React.FC<ReportsViewProps> = ({ transactions, settings, accounts }) => {
 
   const [rangePreset, setRangePreset] = useState<RangePresetType>('month');
   const [customMode, setCustomMode] = useState<'day' | 'range'>('day');
@@ -48,6 +55,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ transactions, settings
   const [searchTerm, setSearchTerm] = useState('');
   const [tablePage, setTablePage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(12);
+  const [expandedPersonKey, setExpandedPersonKey] = useState<string | null>(null);
 
   useLockBodyScroll(isReportModalOpen);
 
@@ -156,6 +164,11 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ transactions, settings
       })),
     };
   }, [filteredTx]);
+
+  // Break down inflows by destination account and depositing person
+  const accountDeposits = useMemo(() => {
+    return getAccountPersonDeposits(filteredTx, accounts);
+  }, [filteredTx, accounts]);
 
   // Export to Excel / CSV with Persian UTF-8 BOM
   const handleExportCSV = () => {
@@ -456,6 +469,150 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ transactions, settings
           </div>
         </div>
 
+        {/* Account and Person Deposit Breakdown (واریزی اشخاص به صندوق‌ها در دوره گزارش) */}
+        <div className="p-5 rounded-2xl bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-[#2596BE]/15 text-[#2596BE] flex items-center justify-center">
+                <Landmark className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
+                  <span>تفکیک واریزی اشخاص به صندوق‌ها و کارتخوان‌ها</span>
+                  <span className="text-[11px] font-normal text-slate-400">({periodLabel})</span>
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  گزارش مجموع وجوه نقدی و کارتی واریز شده توسط هر شخص به تفکیک هر صندوق یا حساب
+                </p>
+              </div>
+            </div>
+
+            <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
+              مجموع دریافتی صندوق‌ها: {formatToman(accountDeposits.reduce((s, a) => s + a.totalDeposit, 0))} تومان
+            </span>
+          </div>
+
+          {accountDeposits.length === 0 ? (
+            <p className="text-xs text-slate-400 py-6 text-center">
+              در این بازه زمانی، واریزی نقدی یا بانکی توسط اشخاص ثبت نشده است.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {accountDeposits.map((acc) => {
+                const isCash = acc.accountType === 'cash' || acc.accountName.includes('صندوق') || acc.accountName.includes('دخل');
+                const isPos = acc.accountType === 'pos' || acc.accountName.includes('پوز') || acc.accountName.includes('کارتخوان');
+
+                return (
+                  <div
+                    key={acc.accountId}
+                    className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/40 space-y-3"
+                  >
+                    {/* Account Header */}
+                    <div className="flex items-center justify-between pb-2 border-b border-slate-200/60 dark:border-slate-800">
+                      <div className="flex items-center gap-2">
+                        <div className="p-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                          {isCash ? (
+                            <Wallet className="w-4 h-4 text-amber-500" />
+                          ) : isPos ? (
+                            <CreditCard className="w-4 h-4 text-[#2596BE]" />
+                          ) : (
+                            <Building className="w-4 h-4 text-blue-500" />
+                          )}
+                        </div>
+                        <div>
+                          <h4 className="font-bold text-xs text-slate-900 dark:text-white">
+                            {acc.accountName}
+                          </h4>
+                          <span className="text-[10px] text-slate-400">
+                            {acc.txCount} تراکنش واریزی
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="text-left font-black text-sm text-slate-900 dark:text-white tabular-nums">
+                        {formatToman(acc.totalDeposit)}
+                        <span className="text-[10px] font-normal text-slate-400 mr-1">تومان</span>
+                      </div>
+                    </div>
+
+                    {/* Persons List */}
+                    <div className="space-y-2 max-h-60 overflow-y-auto pr-0.5">
+                      {acc.persons.map((p, pIdx) => {
+                        const pct = acc.totalDeposit > 0 ? Math.round((p.totalAmount / acc.totalDeposit) * 100) : 0;
+                        const isExpanded = expandedPersonKey === `${acc.accountId}_${p.personName}`;
+
+                        return (
+                          <div
+                            key={pIdx}
+                            className="p-2.5 rounded-lg bg-white dark:bg-slate-800/80 border border-slate-200/70 dark:border-slate-700/60 text-xs space-y-1.5"
+                          >
+                            <div
+                              onClick={() => setExpandedPersonKey(isExpanded ? null : `${acc.accountId}_${p.personName}`)}
+                              className="flex items-center justify-between cursor-pointer group"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-slate-800 dark:text-slate-200 group-hover:text-[#2596BE] transition-colors">
+                                  {p.personName}
+                                </span>
+                                <span className="text-[10px] text-slate-400 tabular-nums">
+                                  ({p.count} واریز)
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold tabular-nums text-slate-900 dark:text-white">
+                                  {formatToman(p.totalAmount)} ت
+                                </span>
+                                <span className="text-[10px] font-semibold text-[#2596BE] bg-[#2596BE]/10 px-1.5 py-0.5 rounded">
+                                  {pct}٪
+                                </span>
+                                {isExpanded ? (
+                                  <ChevronUp className="w-3.5 h-3.5 text-slate-400" />
+                                ) : (
+                                  <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Progress bar */}
+                            <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-1.5 overflow-hidden">
+                              <div
+                                className="bg-[#2596BE] h-full rounded-full transition-all"
+                                style={{ width: `${Math.min(pct, 100)}%` }}
+                              ></div>
+                            </div>
+
+                            {/* Expanded details */}
+                            {isExpanded && (
+                              <div className="pt-2 border-t border-slate-100 dark:border-slate-700/60 space-y-1 text-[11px]">
+                                {p.transactions.map((tx) => (
+                                  <div key={tx.id} className="flex items-center justify-between py-1 px-1.5 rounded bg-slate-50 dark:bg-slate-900/50">
+                                    <div className="flex items-center gap-1.5 truncate max-w-[200px]">
+                                      <span className="font-mono text-slate-400 text-[10px]">
+                                        {formatJalaliReadable(tx.date, true)}
+                                      </span>
+                                      <span className="truncate text-slate-700 dark:text-slate-300">
+                                        {tx.description}
+                                      </span>
+                                    </div>
+                                    <span className="font-bold tabular-nums text-emerald-600 dark:text-emerald-400 shrink-0">
+                                      +{formatToman(tx.amount)} ت
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         {/* Detailed Transactions in Period Table (Ledger-style Pagination, No Up/Down Inner Scroll) */}
         <div className="p-5 rounded-2xl bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
@@ -748,6 +905,33 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ transactions, settings
                     </div>
                   </div>
                 </div>
+
+                {/* Account & Person Deposits in Printable */}
+                {accountDeposits.length > 0 && (
+                  <div>
+                    <h4 className="font-bold text-xs text-slate-800 border-b border-slate-300 pb-1 mb-2">
+                      تفکیک واریزی اشخاص به صندوق‌ها و کارتخوان‌ها در دوره
+                    </h4>
+                    <div className="grid grid-cols-2 gap-3 text-[11px]">
+                      {accountDeposits.map((acc) => (
+                        <div key={acc.accountId} className="p-2 border border-slate-200 rounded-lg space-y-1">
+                          <div className="flex justify-between font-bold border-b border-slate-200 pb-1">
+                            <span>{acc.accountName}:</span>
+                            <span className="tabular-nums font-mono">{formatToman(acc.totalDeposit)} تومان</span>
+                          </div>
+                          <div className="space-y-0.5 text-slate-600">
+                            {acc.persons.map((p, idx) => (
+                              <div key={idx} className="flex justify-between">
+                                <span className="truncate max-w-[140px]">{p.personName} ({p.count}):</span>
+                                <span className="tabular-nums font-mono font-medium">{formatToman(p.totalAmount)} ت</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Transactions Table Snippet */}
                 <div>

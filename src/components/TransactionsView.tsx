@@ -12,10 +12,14 @@ import {
   AlertCircle,
   X,
   Loader2,
+  Landmark,
+  Wallet,
+  CreditCard,
+  Building,
 } from 'lucide-react';
 import { Account, Category, Person, Transaction, TransactionType } from '../types/index.ts';
 import { formatJalaliReadable, formatToman, normalizeDigits, normalizeForSearch, parseTomanInput } from '../utils/jalali.ts';
-import { getTransactionMeta, isMixedGamingBuffet } from '../utils/transactions.ts';
+import { getTransactionMeta, isMixedGamingBuffet, getAccountPersonDeposits } from '../utils/transactions.ts';
 import { ConfirmModal } from './ConfirmModal.tsx';
 import { useLockBodyScroll } from '../utils/useLockBodyScroll.ts';
 import { SearchablePersonSelect } from './SearchablePersonSelect.tsx';
@@ -65,9 +69,11 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
   // Delete Modal State
   const [txToDelete, setTxToDelete] = useState<Transaction | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [isDepositsModalOpen, setIsDepositsModalOpen] = useState(false);
+  const [expandedPersonKey, setExpandedPersonKey] = useState<string | null>(null);
 
   // Lock body scroll when editing or deleting modal is open
-  useLockBodyScroll(editingTx !== null || txToDelete !== null);
+  useLockBodyScroll(editingTx !== null || txToDelete !== null || isDepositsModalOpen);
 
 
   // Filtered and sorted transactions
@@ -143,6 +149,11 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
     });
     return { cashIn, expense: exp, creditDebt, net: cashIn - exp };
   }, [filteredTransactions]);
+
+  // Inflow deposits into accounts by person based on filtered transactions
+  const accountDeposits = useMemo(() => {
+    return getAccountPersonDeposits(filteredTransactions, accounts);
+  }, [filteredTransactions, accounts]);
 
   // Pagination slice
   const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / pageSize));
@@ -317,19 +328,29 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
               مجموع هزینه‌ها: <strong className="text-rose-600 dark:text-rose-400 tabular-nums">{formatToman(totals.expense)}</strong>
             </span>
           </div>
-          {(search || selectedType !== 'all' || selectedAccountId !== 'all') && (
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => {
-                setSearch('');
-                setSelectedType('all');
-                setSelectedAccountId('all');
-                setSelectedCategoryId('all');
-              }}
-              className="text-[#2596BE] hover:underline cursor-pointer font-medium"
+              type="button"
+              onClick={() => setIsDepositsModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#2596BE]/10 hover:bg-[#2596BE]/20 text-[#2596BE] font-bold text-xs transition-colors cursor-pointer"
             >
-              پاک کردن فیلترها
+              <Landmark className="w-3.5 h-3.5" />
+              <span>تفکیک واریزی اشخاص به صندوق‌ها</span>
             </button>
-          )}
+            {(search || selectedType !== 'all' || selectedAccountId !== 'all' || selectedCategoryId !== 'all') && (
+              <button
+                onClick={() => {
+                  setSearch('');
+                  setSelectedType('all');
+                  setSelectedAccountId('all');
+                  setSelectedCategoryId('all');
+                }}
+                className="text-[#2596BE] hover:underline cursor-pointer font-medium"
+              >
+                پاک کردن فیلترها
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -648,6 +669,122 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
         onConfirm={handleConfirmDelete}
         onClose={() => setTxToDelete(null)}
       />
+
+      {/* Account and Person Deposits Breakdown Modal */}
+      {isDepositsModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-[#2596BE]/15 text-[#2596BE] flex items-center justify-center">
+                  <Landmark className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    تفکیک واریزی اشخاص به صندوق‌ها و کارتخوان‌ها
+                  </h3>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    بر اساس تراکنش‌های فیلتر شده فعلی ({filteredTransactions.length} تراکنش)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsDepositsModalOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-5 overflow-y-auto space-y-4 flex-1">
+              {accountDeposits.length === 0 ? (
+                <div className="py-10 text-center text-xs text-slate-400">
+                  در لیست تراکنش‌های فیلتر شده، واریزی به صندوقی یافت نشد.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {accountDeposits.map((acc) => {
+                    const isCash = acc.accountType === 'cash' || acc.accountName.includes('صندوق') || acc.accountName.includes('دخل');
+                    const isPos = acc.accountType === 'pos' || acc.accountName.includes('پوز') || acc.accountName.includes('کارتخوان');
+
+                    return (
+                      <div
+                        key={acc.accountId}
+                        className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-900/40 space-y-3"
+                      >
+                        <div className="flex items-center justify-between pb-2 border-b border-slate-200/60 dark:border-slate-800">
+                          <div className="flex items-center gap-2">
+                            <div className="p-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                              {isCash ? (
+                                <Wallet className="w-4 h-4 text-amber-500" />
+                              ) : isPos ? (
+                                <CreditCard className="w-4 h-4 text-[#2596BE]" />
+                              ) : (
+                                <Building className="w-4 h-4 text-blue-500" />
+                              )}
+                            </div>
+                            <div>
+                              <h4 className="font-bold text-xs text-slate-900 dark:text-white">
+                                {acc.accountName}
+                              </h4>
+                              <span className="text-[10px] text-slate-400">
+                                {acc.txCount} تراکنش واریزی
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="text-left font-black text-sm text-slate-900 dark:text-white tabular-nums">
+                            {formatToman(acc.totalDeposit)}
+                            <span className="text-[10px] font-normal text-slate-400 mr-1">تومان</span>
+                          </div>
+                        </div>
+
+                        {/* Persons List */}
+                        <div className="space-y-2">
+                          {acc.persons.map((p, idx) => (
+                            <div
+                              key={idx}
+                              className="flex items-center justify-between text-xs py-2 px-3 rounded-xl bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700/60"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="w-1.5 h-1.5 rounded-full bg-[#2596BE]"></span>
+                                <span className="font-semibold text-slate-800 dark:text-slate-200">
+                                  {p.personName}
+                                </span>
+                                <span className="text-[10px] text-slate-400 font-normal">
+                                  ({p.count} تراکنش)
+                                </span>
+                              </div>
+                              <div className="text-left font-bold tabular-nums text-slate-900 dark:text-white">
+                                {formatToman(p.totalAmount)}
+                                <span className="text-[10px] font-normal text-slate-400 mr-1">تومان</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setIsDepositsModalOpen(false)}
+                className="px-4 py-2 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold rounded-xl cursor-pointer"
+              >
+                بستن
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

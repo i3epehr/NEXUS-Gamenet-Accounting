@@ -1,4 +1,4 @@
-import { Transaction } from '../types/index.ts';
+import { Account, Transaction } from '../types/index.ts';
 
 export interface TransactionMeta {
   label: string;
@@ -203,4 +203,151 @@ export function isMixedGamingBuffet(tx: { categoryName?: string; tabId?: string;
     return true;
   }
   return false;
+}
+
+export interface PersonDepositEntry {
+  personName: string;
+  personId?: string;
+  totalAmount: number;
+  count: number;
+  transactions: Transaction[];
+}
+
+export interface AccountDepositGroup {
+  accountId: string;
+  accountName: string;
+  accountType?: string;
+  totalDeposit: number;
+  txCount: number;
+  persons: PersonDepositEntry[];
+}
+
+/**
+ * Groups deposit/inflow transactions by destination account and depositing person.
+ * Only includes actual inflows into an account (income, receivable collection, wallet charge).
+ */
+export function getAccountPersonDeposits(
+  transactions: Transaction[],
+  accounts?: Account[]
+): AccountDepositGroup[] {
+  const accMap = new Map<string, {
+    accountName: string;
+    accountType?: string;
+    totalDeposit: number;
+    txCount: number;
+    personMap: Map<string, {
+      personId?: string;
+      totalAmount: number;
+      count: number;
+      transactions: Transaction[];
+    }>;
+  }>();
+
+  for (const tx of transactions) {
+    const meta = getTransactionMeta(tx);
+    // Only actual cash/pos deposits into an account:
+    const isDeposit =
+      (meta.kind === 'income' || meta.kind === 'receivable_collection' || meta.kind === 'wallet_charge') &&
+      Boolean(tx.toAccountId || tx.toAccountName);
+
+    if (!isDeposit) continue;
+
+    const accId = tx.toAccountId || 'unknown_acc';
+    const accName = tx.toAccountName || accounts?.find((a) => a.id === accId)?.name || 'صندوق / حساب نامشخص';
+    const accType = accounts?.find((a) => a.id === accId)?.type;
+
+    if (!accMap.has(accId)) {
+      accMap.set(accId, {
+        accountName: accName,
+        accountType: accType,
+        totalDeposit: 0,
+        txCount: 0,
+        personMap: new Map(),
+      });
+    }
+
+    const accEntry = accMap.get(accId)!;
+    accEntry.totalDeposit += tx.amount;
+    accEntry.txCount += 1;
+
+    const pName = (tx.personName && tx.personName.trim()) ? tx.personName.trim() : 'مشتری آزاد / گذری';
+    const pKey = tx.personId ? `id_${tx.personId}` : `name_${pName}`;
+
+    if (!accEntry.personMap.has(pKey)) {
+      accEntry.personMap.set(pKey, {
+        personId: tx.personId,
+        totalAmount: 0,
+        count: 0,
+        transactions: [],
+      });
+    }
+
+    const pEntry = accEntry.personMap.get(pKey)!;
+    pEntry.totalAmount += tx.amount;
+    pEntry.count += 1;
+    pEntry.transactions.push(tx);
+  }
+
+  // Convert to array and sort accounts by total deposit descending, persons by amount descending
+  const result: AccountDepositGroup[] = [];
+  for (const [accId, data] of accMap.entries()) {
+    const persons: PersonDepositEntry[] = [];
+    for (const [pKey, pData] of data.personMap.entries()) {
+      const pName = pKey.startsWith('name_')
+        ? pKey.replace('name_', '')
+        : (pData.transactions[0]?.personName || 'مشتری نامشخص');
+      persons.push({
+        personName: pName,
+        personId: pData.personId,
+        totalAmount: pData.totalAmount,
+        count: pData.count,
+        transactions: pData.transactions,
+      });
+    }
+    persons.sort((a, b) => b.totalAmount - a.totalAmount);
+
+    result.push({
+      accountId: accId,
+      accountName: data.accountName,
+      accountType: data.accountType,
+      totalDeposit: data.totalDeposit,
+      txCount: data.txCount,
+      persons,
+    });
+  }
+
+  result.sort((a, b) => b.totalDeposit - a.totalDeposit);
+  return result;
+}
+
+/**
+ * Calculates the running balance for a person's transactions.
+ * Returns a map of txId -> balanceAfterTransaction.
+ * Working backwards from current balance ensures exact consistency.
+ */
+export function calculatePersonRunningBalances(
+  personCurrentBalance: number,
+  transactions: Transaction[]
+): Map<string, number> {
+  const map = new Map<string, number>();
+  // Sort transactions newest to oldest
+  const sorted = [...transactions].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  let curBal = personCurrentBalance || 0;
+  for (const tx of sorted) {
+    map.set(tx.id, curBal);
+    const meta = getTransactionMeta(tx);
+    let delta = 0;
+    if (meta.kind === 'credit') {
+      delta = tx.amount;
+    } else if (meta.kind === 'receivable_collection' || meta.kind === 'wallet_charge') {
+      delta = -tx.amount;
+    } else if (meta.kind === 'wallet_deduct' || meta.kind === 'debt_settlement') {
+      delta = tx.amount;
+    } else {
+      delta = 0;
+    }
+    curBal = curBal - delta;
+  }
+  return map;
 }

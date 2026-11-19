@@ -33,7 +33,7 @@ import {
 } from 'lucide-react';
 import { Account, GameNetSettings, OpenTab, Person, PersonType, Transaction } from '../types/index.ts';
 import { formatJalaliReadable, formatToman, getJalaliDateString, normalizeDigits, parseTomanInput, normalizeForSearch, cleanPhoneForSearch } from '../utils/jalali.ts';
-import { getTransactionMeta, getPaymentMethodBadge, isMixedGamingBuffet } from '../utils/transactions.ts';
+import { getTransactionMeta, getPaymentMethodBadge, isMixedGamingBuffet, calculatePersonRunningBalances } from '../utils/transactions.ts';
 import { ConfirmModal } from './ConfirmModal.tsx';
 import { useLockBodyScroll } from '../utils/useLockBodyScroll.ts';
 
@@ -1155,6 +1155,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
           const personTx = transactions
             .filter((t) => t.personId === detailPerson.id)
             .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+          const runningBalanceMap = calculatePersonRunningBalances(detailPerson.currentBalance, personTx);
           const totalPaid = getPersonTotalPaid(detailPerson.id);
           const relatedTabs = openTabs.filter((t) => t.personId === detailPerson.id);
 
@@ -1524,16 +1525,44 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                                     </div>
                                   </div>
 
-                                  {/* Left side: Method badge, Amount in Toman, Eye icon */}
+                                  {/* Left side: Method badge, Amount in Toman, Running balance, Eye icon */}
                                   <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-200/60 dark:border-slate-800">
-                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-lg border ${methodBadge.badgeClass}`}>
-                                      {methodBadge.label}
-                                    </span>
-                                    <div className="text-left font-black tabular-nums text-sm">
-                                      <span className={meta.amountClass}>
-                                        {formatToman(tx.amount)}
-                                      </span>
-                                      <span className="text-[10px] text-slate-400 font-normal mr-1">تومان</span>
+                                    <div className="flex flex-col items-end gap-0.5 text-left">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-lg border ${methodBadge.badgeClass}`}>
+                                          {methodBadge.label}
+                                        </span>
+                                        <div className="text-left font-black tabular-nums text-sm">
+                                          <span className={meta.amountClass}>
+                                            {formatToman(tx.amount)}
+                                          </span>
+                                          <span className="text-[10px] text-slate-400 font-normal mr-1">تومان</span>
+                                        </div>
+                                      </div>
+                                      {/* Running balance up to this transaction */}
+                                      {(() => {
+                                        const bal = runningBalanceMap.get(tx.id);
+                                        if (bal === undefined) return null;
+                                        return (
+                                          <span
+                                            className="text-[10px] tabular-nums font-semibold flex items-center gap-1 mt-0.5"
+                                            title="مانده حساب شخص پس از ثبت این تراکنش"
+                                          >
+                                            <span className="text-slate-400 font-normal">مانده پس از تراکنش:</span>
+                                            {bal > 0 ? (
+                                              <span className="text-amber-600 dark:text-amber-400 font-bold">
+                                                {formatToman(bal)} ت (بدهکار)
+                                              </span>
+                                            ) : bal < 0 ? (
+                                              <span className="text-emerald-600 dark:text-emerald-400 font-bold">
+                                                {formatToman(Math.abs(bal))} ت (کیف پول)
+                                              </span>
+                                            ) : (
+                                              <span className="text-slate-500 font-medium">۰ (تسویه)</span>
+                                            )}
+                                          </span>
+                                        );
+                                      })()}
                                     </div>
                                     <Eye className="w-4 h-4 text-slate-400 group-hover:text-[#2596BE] transition-colors shrink-0" />
                                   </div>
@@ -1576,7 +1605,13 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
       )}
 
       {/* POPUP MODAL: CUSTOMER HISTORY TRANSACTION DETAIL (جزئیات کامل فاکتور / تسویه / ادمین) */}
-      {selectedHistoryTx && (
+      {selectedHistoryTx && (() => {
+        const histPerson = persons.find((p) => p.id === selectedHistoryTx.personId) || detailPerson;
+        const histPersonTx = histPerson ? transactions.filter((t) => t.personId === histPerson.id) : [];
+        const histRunningMap = histPerson ? calculatePersonRunningBalances(histPerson.currentBalance, histPersonTx) : new Map<string, number>();
+        const bal = histRunningMap.get(selectedHistoryTx.id);
+
+        return (
         <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
           <div className="bg-white dark:bg-[#111C33] border border-slate-200 dark:border-slate-800 rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
             {/* Header */}
@@ -1698,6 +1733,33 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                     )}
                   </div>
                 </div>
+
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800 space-y-1 sm:col-span-2">
+                  <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                    <Wallet className="w-3.5 h-3.5 text-[#2596BE]" />
+                    <span>مانده حساب و بدهی شخص پس از این تراکنش:</span>
+                  </span>
+                  <div className="font-bold text-xs sm:text-sm">
+                    {(() => {
+                      if (bal === undefined) return <span className="text-slate-400">-</span>;
+                      if (bal > 0) {
+                        return (
+                          <span className="text-amber-600 dark:text-amber-400 tabular-nums">
+                            {formatToman(bal)} تومان بدهکار (نسیه)
+                          </span>
+                        );
+                      }
+                      if (bal < 0) {
+                        return (
+                          <span className="text-emerald-600 dark:text-emerald-400 tabular-nums">
+                            {formatToman(Math.abs(bal))} تومان بستانکار (شارژ کیف پول)
+                          </span>
+                        );
+                      }
+                      return <span className="text-slate-500 font-medium">۰ تومان (تسویه کامل / بی‌حساب)</span>;
+                    })()}
+                  </div>
+                </div>
               </div>
 
               {/* Description */}
@@ -1760,7 +1822,8 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* POPUP MODAL: CUSTOMER HISTORY TAB DETAIL (جزئیات کامل میز / کنسول / زمان بازی) */}
       {selectedHistoryTab && (
