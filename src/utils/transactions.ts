@@ -352,3 +352,54 @@ export function calculatePersonRunningBalances(
   }
   return map;
 }
+
+/**
+ * Generates an array of page numbers and ellipsis markers for standard website pagination.
+ * Shows first pages, surrounding pages around current page, and last pages.
+ * E.g.: [1, 2, 'ellipsis-start', 8, 9, 10, 'ellipsis-end', 19, 20]
+ */
+export function getPaginationItems(
+  currentPage: number,
+  totalPages: number
+): (number | 'ellipsis-start' | 'ellipsis-end')[] {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, i) => i + 1);
+  }
+
+  const showStartEllipsis = currentPage > 4;
+  const showEndEllipsis = currentPage < totalPages - 3;
+
+  if (!showStartEllipsis && showEndEllipsis) {
+    // Near beginning: 1, 2, 3, 4, 5, '...', total-1, total
+    const items: (number | 'ellipsis-start' | 'ellipsis-end')[] = [];
+    for (let i = 1; i <= Math.min(5, totalPages); i++) {
+      items.push(i);
+    }
+    items.push('ellipsis-end');
+    if (!items.includes(totalPages - 1)) items.push(totalPages - 1);
+    if (!items.includes(totalPages)) items.push(totalPages);
+    return items;
+  }
+
+  if (showStartEllipsis && !showEndEllipsis) {
+    // Near end: 1, 2, '...', total-4, total-3, total-2, total-1, total
+    const items: (number | 'ellipsis-start' | 'ellipsis-end')[] = [1, 2, 'ellipsis-start'];
+    for (let i = totalPages - 4; i <= totalPages; i++) {
+      if (!items.includes(i)) items.push(i);
+    }
+    return items;
+  }
+
+  // Middle: 1, 2, '...', current-1, current, current+1, '...', total-1, total
+  return [
+    1,
+    2,
+    'ellipsis-start',
+    currentPage - 1,
+    currentPage,
+    currentPage + 1,
+    'ellipsis-end',
+    totalPages - 1,
+    totalPages,
+  ];
+}

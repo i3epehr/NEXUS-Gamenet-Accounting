@@ -64,7 +64,7 @@ import {
   normalizeForSearch,
   getDateRangeBounds,
 } from '../utils/jalali.ts';
-import { getPaymentMethodBadge } from '../utils/transactions.ts';
+import { getPaymentMethodBadge, getPaginationItems } from '../utils/transactions.ts';
 import { ConfirmModal } from './ConfirmModal.tsx';
 import { useLockBodyScroll } from '../utils/useLockBodyScroll.ts';
 import { api } from '../services/api.ts';
@@ -1129,7 +1129,7 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
                         </div>
                         <div className="flex items-center gap-2 text-[11px] text-slate-400 font-mono">
                           <Clock className="w-3 h-3 text-[#2596BE]" />
-                          <span>شروع: {formatJalaliReadable(tab.startedAt, false)}</span>
+                          <span>شروع: {formatJalaliReadable(tab.startedAt, true)}</span>
                           <span className="text-slate-500 font-sans">
                             ({calculateDuration(tab.startedAt)})
                           </span>
@@ -1682,7 +1682,7 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
                               </div>
                               <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-1 font-mono">
                                 <Clock className="w-3 h-3" />
-                                <span>{formatJalaliReadable(ct.closedAt || ct.updatedAt || ct.startedAt, false)}</span>
+                                <span>{formatJalaliReadable(ct.closedAt || ct.updatedAt || ct.createdAt || ct.startedAt, true)}</span>
                                 {ct.personName && (
                                   <span className="text-[#2596BE] font-sans font-medium">مشتری: {ct.personName}</span>
                                 )}
@@ -1799,20 +1799,32 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
                         <ChevronRight className="w-3.5 h-3.5" />
                         <span>قبلی</span>
                       </button>
-                      {Array.from({ length: totalClosedTabsPages }, (_, i) => i + 1).map((pg) => (
-                        <button
-                          key={pg}
-                          type="button"
-                          onClick={() => setClosedTabsPage(pg)}
-                          className={`w-7 h-7 rounded-lg text-xs font-bold transition-all cursor-pointer font-mono ${
-                            currentPageValid === pg
-                              ? 'bg-[#2596BE] text-white shadow-2xs'
-                              : 'border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-                          }`}
-                        >
-                          {pg}
-                        </button>
-                      ))}
+                      {getPaginationItems(currentPageValid, totalClosedTabsPages).map((item, idx) => {
+                        if (typeof item === 'string') {
+                          return (
+                            <span
+                              key={`ellipsis-${idx}`}
+                              className="w-6 h-7 flex items-center justify-center text-xs font-bold text-slate-400 select-none"
+                            >
+                              ...
+                            </span>
+                          );
+                        }
+                        return (
+                          <button
+                            key={item}
+                            type="button"
+                            onClick={() => setClosedTabsPage(item)}
+                            className={`min-w-7 h-7 px-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer font-mono ${
+                              currentPageValid === item
+                                ? 'bg-[#2596BE] text-white shadow-2xs'
+                                : 'border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                            }`}
+                          >
+                            {item}
+                          </button>
+                        );
+                      })}
                       <button
                         type="button"
                         disabled={currentPageValid >= totalClosedTabsPages}
@@ -3443,7 +3455,7 @@ export const OpenTabsView: React.FC<OpenTabsViewProps> = ({
                         محاسبه از زمان باز شدن میز (پیش‌فرض)
                       </p>
                       <p className="text-[11px] text-slate-400">
-                        از ساعت {formatJalaliReadable(tabForTimerConfig.startedAt, false)} ({calculateDuration(tabForTimerConfig.startedAt)} قبل)
+                        از ساعت {formatJalaliReadable(tabForTimerConfig.startedAt, true)} ({calculateDuration(tabForTimerConfig.startedAt)} قبل)
                       </p>
                     </div>
                   </label>
