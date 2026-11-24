@@ -29,7 +29,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { AuditLog, Category, CategorySection, GameNetSettings, ResetOptions, Role, User, ReservationAlarmSoundType } from '../types/index.ts';
-import { formatJalaliReadable } from '../utils/jalali.ts';
+import { formatJalaliReadable, normalizeDigits } from '../utils/jalali.ts';
 import { ConfirmModal } from './ConfirmModal.tsx';
 import { useLockBodyScroll } from '../utils/useLockBodyScroll.ts';
 import { playReservationAlarmSound } from '../utils/audioAlert.ts';
@@ -378,12 +378,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       setUserError('نام کامل الزامی است.');
       return;
     }
+    const cleanUsername = normalizeDigits(userUsername).trim();
+    if (!cleanUsername) {
+      setUserError('نام کاربری الزامی است.');
+      return;
+    }
+
+    // Check duplicate username in existing users
+    const duplicate = users.find(
+      (u) => (!editingUser || u.id !== editingUser.id) && normalizeDigits(u.username).trim().toLowerCase() === cleanUsername.toLowerCase()
+    );
+    if (duplicate) {
+      setUserError('این نام کاربری قبلا برای کاربر دیگری ثبت شده است.');
+      return;
+    }
+
     try {
       setUserLoading(true);
       setUserError(null);
       if (editingUser) {
         if (!onUpdateUser) return;
         await onUpdateUser(editingUser.id, {
+          username: cleanUsername,
           fullName: userFullName.trim(),
           phone: userPhone.trim(),
           role: userRole,
@@ -393,13 +409,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         });
         setEditingUser(null);
       } else {
-        if (!userUsername.trim()) {
-          setUserError('نام کاربری الزامی است.');
-          return;
-        }
         if (!onCreateUser) return;
         await onCreateUser({
-          username: userUsername.trim(),
+          username: cleanUsername,
           fullName: userFullName.trim(),
           phone: userPhone.trim(),
           role: userRole,
@@ -1553,9 +1565,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         type="text"
                         value={userUsername}
                         onChange={(e) => setUserUsername(e.target.value)}
-                        disabled={!!editingUser}
                         placeholder="alireza_admin"
-                        className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs font-mono disabled:opacity-50"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-xs font-mono"
                         required
                       />
                     </div>

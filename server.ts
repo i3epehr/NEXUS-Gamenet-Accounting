@@ -50,6 +50,12 @@ const SESSION_TTL_REMEMBER_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const LOGIN_MAX_FAILS = 10;
 const LOGIN_WINDOW_MS = 2 * 60 * 1000; // 2 minutes
 
+function normalizeEnglishDigits(str: string): string {
+  return str
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 1776))
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 1632));
+}
+
 interface ServerSession {
   token: string;
   userId: string;
@@ -1249,7 +1255,7 @@ app.get('/api/public/branding', (_req: Request, res: Response) => {
 // Auth & Session Lifecycle
 app.post('/api/auth/login', (req: Request, res: Response) => {
   const { username, password, rememberMe } = req.body || {};
-  const normalizedUsername = String(username || '').trim().toLowerCase();
+  const normalizedUsername = normalizeEnglishDigits(String(username || '').trim()).toLowerCase();
   const inputPassword = String(password || '').trim();
   const clientIp = getClientIp(req);
   const rateKey = `${clientIp}:${normalizedUsername}`;
@@ -1269,7 +1275,7 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
   }
 
   const db = loadDatabase();
-  const user = db.users.find((u) => u.username.toLowerCase() === normalizedUsername);
+  const user = db.users.find((u) => normalizeEnglishDigits(u.username.trim()).toLowerCase() === normalizedUsername);
 
   const recordFailedAttempt = () => {
     const prev = loginAttempts.get(rateKey);
@@ -1372,12 +1378,13 @@ app.post('/api/users', (req: AuthedRequest, res: Response) => {
     return;
   }
   const { username, fullName, role, permissions, phone, password } = req.body;
-  if (!username || !fullName) {
+  const cleanUsername = username ? normalizeEnglishDigits(String(username).trim()) : '';
+  if (!cleanUsername || !fullName) {
     res.status(400).json({ error: 'نام و نام کاربری الزامی است' });
     return;
   }
   const db = loadDatabase();
-  if (db.users.some((u) => u.username.toLowerCase() === username.trim().toLowerCase())) {
+  if (db.users.some((u) => normalizeEnglishDigits(u.username.trim()).toLowerCase() === cleanUsername.toLowerCase())) {
     res.status(400).json({ error: 'این نام کاربری قبلا ثبت شده است' });
     return;
   }
@@ -1385,7 +1392,7 @@ app.post('/api/users', (req: AuthedRequest, res: Response) => {
   const rawPassword = (password || '123456').trim();
   const newUser: User = {
     id: `usr_${Date.now()}`,
-    username: username.trim(),
+    username: cleanUsername,
     fullName: fullName.trim(),
     role: role || 'operator',
     permissions: Array.isArray(permissions) ? permissions : ['manage_tabs', 'manage_buffet'],
@@ -1396,7 +1403,7 @@ app.post('/api/users', (req: AuthedRequest, res: Response) => {
   };
 
   db.users.push(newUser);
-  logAudit(db, 'user', newUser.id, 'create', `ایجاد کاربر: ${newUser.fullName} (${newUser.role})`);
+  logAudit(db, 'user', newUser.id, 'create', `ایجاد کاربر: ${newUser.fullName} (@${newUser.username})`);
   saveDatabase(db);
   res.status(201).json(sanitizeUser(newUser));
 });
@@ -1407,12 +1414,30 @@ app.put('/api/users/:id', (req: AuthedRequest, res: Response) => {
     return;
   }
   const { id } = req.params;
-  const { fullName, role, permissions, active, phone, password } = req.body;
+  const { username, fullName, role, permissions, active, phone, password } = req.body;
   const db = loadDatabase();
   const user = db.users.find((u) => u.id === id);
   if (!user) {
     res.status(404).json({ error: 'کاربر یافت نشد' });
     return;
+  }
+
+  // Handle username update if provided
+  if (username !== undefined) {
+    const cleanUsername = normalizeEnglishDigits(String(username).trim());
+    if (!cleanUsername) {
+      res.status(400).json({ error: 'نام کاربری نمی‌تواند خالی باشد' });
+      return;
+    }
+    const normalizedNew = cleanUsername.toLowerCase();
+    const conflict = db.users.find(
+      (u) => u.id !== id && normalizeEnglishDigits(u.username.trim()).toLowerCase() === normalizedNew
+    );
+    if (conflict) {
+      res.status(400).json({ error: 'این نام کاربری قبلا برای کاربر دیگری ثبت شده است' });
+      return;
+    }
+    user.username = cleanUsername;
   }
 
   const passwordChanged = !!(password && password.trim());
@@ -1432,7 +1457,7 @@ app.put('/api/users/:id', (req: AuthedRequest, res: Response) => {
     revokeUserSessions(id, req.authSession?.token);
   }
 
-  logAudit(db, 'user', id, 'update', `ویرایش کاربر: ${user.fullName}`);
+  logAudit(db, 'user', id, 'update', `ویرایش کاربر: ${user.fullName} (@${user.username})`);
   saveDatabase(db);
   res.json(sanitizeUser(user));
 });
